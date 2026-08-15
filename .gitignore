@@ -1,0 +1,32 @@
+# 编译产物
+build/*.dll
+build/*.txt
+
+# 引用/依赖（版权程序集，不纳入仓库）
+devtools/verify/
+
+# 发布产物
+*.zip
+release/
+
+# 备份
+backup_*/
+*_backup*/
+
+# 系统 / IDE
+.DS_Store
+Thumbs.db
+*.user
+bin/
+obj/
+
+# 日志
+*.log
+Player.log
+Player-prev.log
+
+# 开发预览截图 / 本地工具
+preview/
+devtools/ILDump.cs
+
+*.bat
