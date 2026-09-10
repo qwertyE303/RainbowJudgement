@@ -94,12 +94,19 @@ namespace RainbowJudgement
             _lastSpacing = spacing;
 
             string gap = new string(' ', spacing);
-            string green = RainbowCounter.PerfectGreenHex;
-            _text.text = string.Format(
-                "<color=#{0}>{1}</color>" + gap + "<color=#006179>{2}</color>" + gap + "<color=#000067>{3}</color>" + gap
-                + "<color=#390055>{4}</color>" + gap + "<color=#000067>{5}</color>" + gap + "<color=#006179>{6}</color>" + gap
-                + "<color=#{0}>{7}</color>",
-                green, counts[0], counts[1], counts[2], counts[3], counts[4], counts[5], counts[6]);
+            // 7 个数字按档位着色，与 X^n、场景内 tick/文字同源（RainbowCounter.TierHex）：
+            //   F G 绿=原版完美绿 | E D 蓝=480nm | C B 青=440nm | A 紫=400nm
+            string green = RainbowCounter.TierHex(3);
+            string blue = RainbowCounter.TierHex(2);
+            string cyan = RainbowCounter.TierHex(1);
+            string purple = RainbowCounter.TierHex(0);
+            _text.text = "<color=#" + green + ">" + counts[0] + "</color>" + gap
+                + "<color=#" + blue + ">" + counts[1] + "</color>" + gap
+                + "<color=#" + cyan + ">" + counts[2] + "</color>" + gap
+                + "<color=#" + purple + ">" + counts[3] + "</color>" + gap
+                + "<color=#" + cyan + ">" + counts[4] + "</color>" + gap
+                + "<color=#" + blue + ">" + counts[5] + "</color>" + gap
+                + "<color=#" + green + ">" + counts[6] + "</color>";
         }
 
         /// <summary>把设置里的字号/位置同步到已存在的 UI（拖动滑条即时生效）</summary>

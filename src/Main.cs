@@ -18,6 +18,7 @@ namespace RainbowJudgement
         {
             Settings = UnityModManager.ModSettings.Load<RainbowSettings>(modEntry);
             ModPath = modEntry.Path;
+            Logger.Init(); // 定位 Mod 目录并清空 <RJ Mod 目录>\Log.txt（每次启动游戏重记）
 
             _harmony = new Harmony(modEntry.Info.Id);
             _harmony.PatchAll(Assembly.GetExecutingAssembly());
@@ -32,7 +33,11 @@ namespace RainbowJudgement
             Logger.Guard("Main/Load", delegate { CounterDisplay.EnsureUI(); });
             Logger.Guard("Main/Load", delegate
             {
-                Logger.Log("[Main] ModPath=" + ModPath + " | 资源基准目录=" + ModPaths.BaseDir);
+                Logger.Log("[Main] UMM ModPath=" + ModPath + " | 资源基准目录=" + ModPaths.BaseDir
+                    + " | 日志文件=" + Logger.FilePath
+                    + " | 开关 彩虹=" + Settings.EnableRainbow + " 平均判定=" + Settings.ShowAverageJudgment
+                    + " 时间=" + Settings.ShowAverageTime + " 颜色=" + Settings.ShowAverageColor
+                    + " 计数器=" + Settings.ShowRainbowCounter + " DebugLog=" + Settings.DebugLog);
             });
             return true;
         }

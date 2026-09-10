@@ -9,17 +9,23 @@ namespace RainbowJudgement
     {
         /// <summary>false = 该条计数没有判定数据（尖刺/激光等 FailMiss）</summary>
         public bool HasData;
-        /// <summary>游戏判定为 Perfect / Auto → 参与本 Mod 统计</summary>
+        /// <summary>【旧字段】v1.0.2 起与 <see cref="InPure"/> 同义，保留是为了不改动已落盘 `.sav` 的列序号
+        /// （第 2 列原本是"游戏判定为 Perfect/Auto"，现在写"是否落在原版完美窗口内"）。</summary>
         public bool IsPerfect;
+        /// <summary>本次判定是否 auto 触发（官方 autoplay / 自动砖块）</summary>
         public bool IsAuto;
-        /// <summary>0~6（见 RainbowCounter.Tier*）；-1 = 无</summary>
+        /// <summary>0~6（见 RainbowCounter.Tier*）；-1 = 无档位（占位条目，或完美窗口之外）</summary>
         public int Tier;
         /// <summary>波长 nm</summary>
         public double Lambda;
         /// <summary>误差时间 ms（带符号，重放时取绝对值）</summary>
         public double TimeMs;
-        /// <summary>归一化完美度 0~1</summary>
+        /// <summary>归一化完美度 = |角度|/θ_PP（仅完美窗口内有意义，0~1；窗口外恒为 0）</summary>
         public double P;
+        /// <summary>是否落在**原版完美窗口**（PP 边界）之内 —— 只有它为 true 才进 7 档计数器与 X^n 的 r；
+        /// 平均判定颜色 / 平均绝对偏差则是所有 HasData 的判定都算（两套范围，刻意分开）。
+        /// 另一个字段 `IsPerfect` 只是它的别名，用来维持落盘列序不变。</summary>
+        public bool InPure;
     }
 
     /// <summary>
@@ -28,7 +34,11 @@ namespace RainbowJudgement
     ///   · 回档：scrMistakesManager.RevertToLastCheckpoint 之后，按游戏 hitMargins.Count 截断并整体重放
     ///   · 清零：scrMistakesManager.Reset（游戏"从头开始"才调用）
     ///   · 续关：ProgressStore 负责把每格数据落盘/读回
-    /// 7 档计数、平均波长、平均绝对偏差、X^n 的 r 全部由本列表重放得出。
+    ///   · 关卡外（主界面/选歌/编辑器搭关）不采集：JudgeHooks 用 GameState.InGameWorld 挡住
+    ///
+    /// 两套统计范围（v1.0.2 定稿）：
+    ///   · **全部有判定数据的判定**（包括完美窗口外的 EP/LP/VE/VL/Too）→ 平均判定颜色、平均绝对偏差
+    ///   · **仅原版完美窗口内**（InPure）→ 7 档计数器（F A B C D E G）、X^n 的 r
     /// </summary>
     public static class RainbowProgress
     {
@@ -37,8 +47,14 @@ namespace RainbowJudgement
         private static bool _pendingFresh;
         private static int _pendingFrame = -1;
         private static string _lastWarnKey;
+        private static int _counted;       // 参与统计的条数（有判定数据）
+        private static int _countedInPure; // 其中落在原版完美窗口内的条数（7 档计数器 / X^n 的来源）
 
         public static int Count { get { return _hits.Count; } }
+        /// <summary>参与统计的判定数（= RainbowState.Count 的来源）</summary>
+        public static int Counted { get { return _counted; } }
+        /// <summary>落在原版完美窗口内的判定数（= 7 档计数之和）</summary>
+        public static int CountedInPure { get { return _countedInPure; } }
 
         // ---------------- 暂存（GetMarginHook 填 → AddHit 消费） ----------------
 
@@ -67,16 +83,28 @@ namespace RainbowJudgement
 
         // ---------------- 追加 / 截断 / 清空 ----------------
 
-        /// <summary>追加一条并同步更新聚合值（热路径，不分配）</summary>
+        /// <summary>追加一条并同步更新聚合值（热路径，不分配）。
+        /// 颜色/偏差：所有有判定数据的都算；7 档计数器：只有完美窗口内（InPure）才算。</summary>
         public static void Append(HitRecord record)
         {
             _hits.Add(record);
-            if (record.IsPerfect)
+            if (record.HasData)
             {
-                RainbowState.Add(record.Lambda, record.TimeMs);
-                RainbowCounter.AddTier(record.Tier < 0 ? RainbowCounter.TierPurple : record.Tier, record.P);
+                CountRecord(record);
             }
             CheckInvariant(false);
+        }
+
+        /// <summary>把一条有效判定的数据计入聚合值（实时追加与回档重放共用同一条路径，保证口径一致）</summary>
+        private static void CountRecord(HitRecord r)
+        {
+            _counted++;
+            RainbowState.Add(r.Lambda, r.TimeMs);       // 平均判定颜色 / 平均绝对偏差：全部判定
+            if (r.InPure && r.Tier >= 0)
+            {
+                _countedInPure++;                        // 7 档计数器 / X^n 的 r：仅原版完美窗口内
+                RainbowCounter.AddTier(r.Tier, r.P);
+            }
         }
 
         public static void Clear()
@@ -84,6 +112,8 @@ namespace RainbowJudgement
             _hits.Clear();
             _pendingFresh = false;
             _pendingFrame = -1;
+            _counted = 0;
+            _countedInPure = 0;
             RainbowState.Reset();
             RainbowCounter.Reset();
             CounterDisplay.Refresh();
@@ -94,12 +124,13 @@ namespace RainbowJudgement
         {
             RainbowState.Reset();
             RainbowCounter.ResetCounts();
+            _counted = 0;
+            _countedInPure = 0;
             for (int i = 0; i < _hits.Count; i++)
             {
                 HitRecord r = _hits[i];
-                if (!r.IsPerfect) continue;
-                RainbowState.Add(r.Lambda, r.TimeMs);
-                RainbowCounter.AddTier(r.Tier < 0 ? RainbowCounter.TierPurple : r.Tier, r.P);
+                if (!r.HasData) continue;
+                CountRecord(r);
             }
             CounterDisplay.Refresh();
             CheckInvariant(true);
@@ -117,13 +148,13 @@ namespace RainbowJudgement
             if (gameCount == 0 && checkpointNum == 0)
             {
                 Clear();
-                if (Main.Settings.DebugLog) Logger.Log("[RainbowProgress] 新关卡：清零");
+                Logger.Log("[RainbowProgress] 新关卡：清零");
             }
             else
             {
                 AlignToGame();
-                if (Main.Settings.DebugLog)
-                    Logger.Log("[RainbowProgress] 场景加载：与游戏对齐 游戏条数=" + gameCount + " checkpointNum=" + checkpointNum);
+                Logger.Log("[RainbowProgress] 场景加载：与游戏对齐 游戏条数=" + gameCount
+                    + " checkpointNum=" + checkpointNum + " → 我们=" + _hits.Count);
             }
         }
 
@@ -131,7 +162,7 @@ namespace RainbowJudgement
         public static void OnGameRevert()
         {
             int gameCount = GameState.MarginCount;
-            if (Main.Settings.DebugLog && gameCount != _hits.Count)
+            if (gameCount != _hits.Count)
                 Logger.Log("[RainbowProgress] 回档前不一致：我们=" + _hits.Count + " 游戏=" + gameCount);
             AlignToGame();
             Logger.Log("[RainbowProgress] 回档同步：保留=" + _hits.Count + "（游戏 " + gameCount + "）");
@@ -141,7 +172,7 @@ namespace RainbowJudgement
         public static void OnGameReset()
         {
             Clear();
-            if (Main.Settings.DebugLog) Logger.Log("[RainbowProgress] 游戏 Reset：清零");
+            Logger.Log("[RainbowProgress] 游戏 Reset：清零");
         }
 
         /// <summary>与游戏当前状态对齐（开关切换后用）：条数不足补占位，多了截断</summary>
@@ -201,27 +232,41 @@ namespace RainbowJudgement
 
         // ---------------- 自检 ----------------
 
-        /// <summary>不变量：列表长度 == 游戏 hitMargins.Count；7 档之和 == 游戏 Perfect+Auto</summary>
+        /// <summary>不变量（v1.0.2 双范围口径）：
+        ///   ① 账本长度 == 游戏 hitMargins.Count
+        ///   ② 参与统计条数 == 游戏可判定条数（条数 − 故障类）
+        ///   ③ 7 档之和 == InPure 条数 == 游戏**严格 Perfect**(+Auto)
+        /// ③ 专门盯「有没有把完美窗口之外的判定算进新增档位里」。
+        /// 注意这里必须比 **Perfect**、不能比 Perfect+EarlyPerfect+LatePerfect：游戏的 EP/LP 是"命中时刻落在
+        /// 完美时间窗内、但角度已超出 PP 边界"的近失判定（EP 可以是 42° 这种大角度），
+        /// 而我们要的"完美"就是角度口径 —— 实测两者严格对齐（例如某局 24 Perfect / 24 条窗口内，
+        /// 而 P+EP+LP=27），拿 EP/LP 去比会产生误报。</summary>
         private static void CheckInvariant(bool verbose)
         {
             try
             {
                 int gameCount = GameState.MarginCount;
+                int gameCountable = GameState.CountableCount;
                 int gamePerfect = GameState.PerfectCount;
-                int ours = RainbowCounter.TotalTiers();
-                if (gameCount != _hits.Count || gamePerfect != ours)
+                int tiers = RainbowCounter.TotalTiers();
+                if (gameCount != _hits.Count || _counted != gameCountable
+                    || tiers != _countedInPure || _countedInPure != gamePerfect)
                 {
-                    string key = _hits.Count + "/" + gameCount + "/" + ours + "/" + gamePerfect;
+                    string key = _hits.Count + "/" + gameCount + "/" + _counted + "/" + gameCountable
+                        + "/" + _countedInPure + "/" + gamePerfect + "/" + tiers;
                     if (key == _lastWarnKey) return; // 同一种不一致只报一次，避免刷屏
                     _lastWarnKey = key;
                     Logger.Warn("[RainbowProgress] 不变量不一致：条数 我们=" + _hits.Count + " 游戏=" + gameCount
-                        + "；完美 我们=" + ours + " 游戏=" + gamePerfect);
+                        + "；统计条数 我们=" + _counted + " 游戏(可判定)=" + gameCountable
+                        + "；完美窗口内 我们=" + _countedInPure + " 游戏(Perfect+Auto)=" + gamePerfect
+                        + "；7档之和=" + tiers);
                 }
                 else
                 {
                     _lastWarnKey = null;
-                    if (verbose && Main.Settings.DebugLog)
-                        Logger.Log("[RainbowProgress] 一致：条数=" + gameCount + " 完美=" + ours);
+                    if (verbose)
+                        Logger.Log("[RainbowProgress] 一致：条数=" + gameCount + " 统计=" + _counted
+                            + " 完美窗口内=" + _countedInPure + " 7档之和=" + tiers);
                 }
             }
             catch { }

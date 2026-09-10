@@ -23,7 +23,10 @@ namespace RainbowJudgement
         private const string FileName = "rainbow_judgement.sav";
         private const int FormatVersion = 1;
 
-        /// <summary>每格判定的字段顺序（写进文件头，方便人工查看）</summary>
+        /// <summary>每格判定的字段顺序（写进文件头，方便人工查看）。
+        /// 注意：第 2 列 "isPerfect" 是历史列名，v1.0.2 起写的是「是否落在原版完美窗口内」(InPure)——
+        /// 保持列序号不变，老存档仍可读（老档里该列为"游戏判定==Perfect/Auto"，语义最接近，一并按 InPure 处理）；
+        /// 老档中完美窗口外的那些条目会少计一次 F~G，再存一次档即精确。</summary>
         private static readonly string[] Fields = { "hasData", "isPerfect", "isAuto", "tier", "lambda", "timeMs", "p" };
 
         // ---------------- 路径 ----------------
@@ -94,8 +97,7 @@ namespace RainbowJudgement
                             catch { }
                         }
                         File.WriteAllText(path, json, new UTF8Encoding(false));
-                        if (Main.Settings.DebugLog)
-                            Logger.Log("[RainbowProgress] 已保存进度：" + hits.Count + " 条 → " + path);
+                        Logger.Log("[RainbowProgress] 已保存进度：" + hits.Count + " 条 → " + path);
                         return;
                     }
                     catch (Exception ex)
@@ -118,7 +120,7 @@ namespace RainbowJudgement
                 HitRecord r = hits[i];
                 List<object> row = new List<object>(Fields.Length);
                 row.Add(r.HasData ? 1 : 0);
-                row.Add(r.IsPerfect ? 1 : 0);
+                row.Add(r.InPure ? 1 : 0);   // 列名仍为 isPerfect（保持落盘格式/列序不变）
                 row.Add(r.IsAuto ? 1 : 0);
                 row.Add(r.Tier);
                 row.Add(r.Lambda);
@@ -228,7 +230,8 @@ namespace RainbowJudgement
 
                     HitRecord r = default(HitRecord);
                     r.HasData = ToInt(row[0]) != 0;
-                    r.IsPerfect = ToInt(row[1]) != 0;
+                    r.InPure = ToInt(row[1]) != 0;   // 列名 isPerfect，v1.0.2 起语义 = InPure
+                    r.IsPerfect = r.InPure;
                     r.IsAuto = ToInt(row[2]) != 0;
                     r.Tier = ToInt(row[3]);
                     r.Lambda = ToDouble(row[4]);

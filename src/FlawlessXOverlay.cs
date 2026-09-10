@@ -38,7 +38,7 @@ namespace RainbowJudgement
                 }
                 else
                 {
-                    if (Main.Settings.DebugLog) Logger.Log("[FlawlessXOverlay] 字体获取失败，启动延迟重试");
+                    Logger.Log("[FlawlessXOverlay] 字体获取失败，启动延迟重试");
                     go.AddComponent<RetryRunner>().Init(controller, exponent, colorHex);
                 }
 
@@ -48,7 +48,7 @@ namespace RainbowJudgement
             }
             catch (Exception ex)
             {
-                if (Main.Settings.DebugLog) Logger.Log("[FlawlessXOverlay] " + ex.Message);
+                Logger.Log("[FlawlessXOverlay] " + ex.Message);
                 Hide();
             }
         }
@@ -84,11 +84,11 @@ namespace RainbowJudgement
                 catch { }
 
                 Position(controller);
-                if (Main.Settings.DebugLog) Logger.Log("[FlawlessXOverlay] 上标已显示: " + exponent);
+                Logger.Log("[FlawlessXOverlay] 上标已显示: " + exponent);
             }
             catch (Exception ex)
             {
-                if (Main.Settings.DebugLog) Logger.Log("[FlawlessXOverlay] Apply: " + ex.Message);
+                Logger.Log("[FlawlessXOverlay] Apply: " + ex.Message);
                 Hide();
             }
         }
@@ -116,15 +116,14 @@ namespace RainbowJudgement
                 rt.anchorMax = new Vector2(0.5f, 0.5f);
                 rt.anchoredPosition = new Vector2(x, y);
 
-                if (Main.Settings.DebugLog)
-                    Logger.Log("[FlawlessXOverlay] pos=(" + x.ToString("F1") + "," + y.ToString("F1") + ") estW=" + width.ToString("F1")
-                        + " fs=" + fontSize + " flawless=" + flawless + " align=" + text.alignment
-                        + " anchor=" + text.rectTransform.anchorMin + " pivot=" + text.rectTransform.pivot
-                        + " anchored=" + text.rectTransform.anchoredPosition + " rect=" + text.rectTransform.rect);
+                Logger.Log("[FlawlessXOverlay] pos=(" + x.ToString("F1") + "," + y.ToString("F1") + ") estW=" + width.ToString("F1")
+                    + " fs=" + fontSize + " flawless=" + flawless + " align=" + text.alignment
+                    + " anchor=" + text.rectTransform.anchorMin + " pivot=" + text.rectTransform.pivot
+                    + " anchored=" + text.rectTransform.anchoredPosition + " rect=" + text.rectTransform.rect);
             }
             catch (Exception ex)
             {
-                if (Main.Settings.DebugLog) Logger.Log("[FlawlessXOverlay] Position: " + ex.Message);
+                Logger.Log("[FlawlessXOverlay] Position: " + ex.Message);
             }
         }
 
@@ -149,7 +148,7 @@ namespace RainbowJudgement
             }
             catch (Exception ex)
             {
-                if (Main.Settings.DebugLog) Logger.Log("[FlawlessXOverlay] FindFont: " + ex.Message);
+                Logger.Log("[FlawlessXOverlay] FindFont: " + ex.Message);
             }
             return null;
         }
@@ -201,7 +200,7 @@ namespace RainbowJudgement
                     _elapsed += Time.deltaTime;
                     if (_elapsed > 3f)
                     {
-                        if (Main.Settings.DebugLog) Logger.Log("[FlawlessXOverlay] 重试超时放弃");
+                        Logger.Log("[FlawlessXOverlay] 重试超时放弃");
                         Destroy(gameObject);
                         return;
                     }

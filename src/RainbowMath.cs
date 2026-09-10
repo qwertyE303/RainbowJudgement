@@ -11,9 +11,13 @@ namespace RainbowJudgement
     {
         /// <summary>仪表盘的满刻度（原版把 Counted 边界画在 ±60 处）</summary>
         public const float CountedScaled = 60f;
-        public const double MinWavelengthNm = 380.0;  // 完美中心（深紫）
-        public const double RedWavelengthNm = 700.0;  // 红
-        public static readonly Color32 RedColor = new Color32(255, 0, 0, 255);
+        /// <summary>紫端波长（= Spectrum.MinWavelengthNm，这里只做单个来源转发，别再各自写 380.0）</summary>
+        public const double MinWavelengthNm = Spectrum.MinWavelengthNm;
+        /// <summary>红端波长（仪表盘渐变的 100% 位置）</summary>
+        public const double RedWavelengthNm = 700.0;
+        /// <summary>红端颜色：**在运行时由颜色映射算出来**，保证 700nm 永远等于"当前映射下的纯红"
+        /// （旧实现硬编码 (255,0,0)，一旦调整亮度曲线就会与映射脱节）。</summary>
+        public static readonly Color32 RedColor = Spectrum.WavelengthToRgb(RedWavelengthNm);
 
         /// <summary>档位下标：0=1/3PP 1=0.5PP 2=2/3PP 3=PP 4=EP/LP 5=Counted</summary>
         public const int Tier1Of3PP = 0;
@@ -143,7 +147,8 @@ namespace RainbowJudgement
             return boundaryDeg * CountedScaled / countedDeg;
         }
 
-        /// <summary>档位纯色(0..5)：433.3/460/486.7/540/620/700nm（供文字/分档使用）</summary>
+        /// <summary>档位锚点色(0..5) = 433.3/460/486.7/540/620/700nm 经**全局颜色映射**得到的颜色。
+        /// 与 tick 颜色、平均判定色块、X^n 颜色同源，所以调整亮度/浅化时会一起变。</summary>
         public static Color32 TierColor(int tier)
         {
             if (tier < 0 || tier > 5) return Spectrum.WavelengthToRgb(RedWavelengthNm);

@@ -73,18 +73,15 @@ namespace RainbowJudgement
 
                     Color32 color = XColor(RainbowCounter.GetXColorIndex());
                     string hex = Spectrum.ToHex(color);
-
-                    if (Main.Settings.DebugLog)
-                        Logger.Log("[FlawlessX] before=[" + text.Replace("\n", "\\n") + "] flawless=[" + flawless
-                            + "] rich=" + __instance.txtCongrats.supportRichText + " fs=" + __instance.txtCongrats.fontSize
-                            + " font=" + (__instance.txtCongrats.font != null ? __instance.txtCongrats.font.name : "NULL"));
+                    Logger.Log("[FlawlessX] before=[" + text.Replace("\n", "\\n") + "] flawless=[" + flawless
+                        + "] rich=" + __instance.txtCongrats.supportRichText + " fs=" + __instance.txtCongrats.fontSize
+                        + " font=" + (__instance.txtCongrats.font != null ? __instance.txtCongrats.font.name : "NULL"));
 
                     __instance.txtCongrats.text = text.Replace(flawless, "<color=#" + hex + ">X</color> " + flawless);
 
-                    if (Main.Settings.DebugLog) Logger.Log("[FlawlessX] after=[" + __instance.txtCongrats.text.Replace("\n", "\\n") + "]");
+                    Logger.Log("[FlawlessX] after=[" + __instance.txtCongrats.text.Replace("\n", "\\n") + "]");
                     FlawlessXOverlay.Show(__instance, exponent, hex);
-                    if (Main.Settings.DebugLog)
-                        Logger.Log("[FlawlessX] 添加 X^" + exponent + " (r=" + ratio.ToString("F4") + ", color=#" + hex + ")");
+                    Logger.Log("[FlawlessX] 添加 X^" + exponent + " (r=" + ratio.ToString("F4") + ", color=#" + hex + ")");
                 }
                 catch (Exception ex)
                 {
@@ -92,13 +89,12 @@ namespace RainbowJudgement
                 }
             }
 
-            /// <summary>X^n 的颜色档位（与判定档位一致）</summary>
+            /// <summary>X^n 的颜色档位：按"本局打到的最好档位"取 4 色之一（档位判定规则未变）。
+            ///   · 0/1/2 档 → **彩虹映射**下的 400nm / 440nm / 480nm（与计数器 7 个数字同一套，见 RainbowCounter.TierRgb）
+            ///   · 3 档（打到 PP/完美绿）→ **保持游戏原版完美绿**，与计数器 F/G 同色</summary>
             private static Color32 XColor(int index)
             {
-                if (index == 3) return RainbowCounter.GetPerfectGreenColor(); // 2/3PP~PP：原版完美绿
-                if (index == 2) return new Color32(0, 97, 121, 255);          // 0.5PP~2/3PP：蓝 480nm
-                if (index == 1) return new Color32(0, 0, 103, 255);           // 1/3PP~0.5PP：青 440nm
-                return new Color32(57, 0, 85, 255);                            // 全 1/3PP：紫 400nm
+                return RainbowCounter.TierRgb(index);
             }
         }
 

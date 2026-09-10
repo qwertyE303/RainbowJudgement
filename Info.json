@@ -2,7 +2,7 @@
   "Id": "RainbowJudgement",
   "DisplayName": "RainbowJudgement",
   "Author": "Entity_303-E3",
-  "Version": "1.0.1",
+  "Version": "1.1.0",
   "AssemblyName": "RainbowJudgement.dll",
   "EntryMethod": "RainbowJudgement.Main.Load",
   "Description": "Rainbow-colored judgement display for ADOFAI."

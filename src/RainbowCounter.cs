@@ -35,12 +35,12 @@ namespace RainbowJudgement
         /// <summary>落后·完美绿</summary>
         public static int GreenLate;
 
-        private static double _sumPerfectRatio; // Σp（p=|角度|/PP边界，0~1）
+        private static double _sumPerfectRatio; // Σp（p=|角度|/PP边界；0~1 在 PP 内，>1 为 PP 开外的提前/落后）
         private static int _perfectCount;       // 计入的判定次数（p=0 也计入分母）
 
         // ---------------- 派生量 ----------------
 
-        /// <summary>7 档计数之和（应与游戏 hitMarginsCount[Perfect]+[Auto] 相等，不变量自检用）</summary>
+        /// <summary>7 档计数之和（v1.0.2 起 = 全部有判定数据的判定数，即游戏 hitMargins.Count 减去故障类，不变量自检用）</summary>
         public static int TotalTiers()
         {
             return GreenEarly + BlueEarly + CyanEarly + Purple + CyanLate + BlueLate + GreenLate;
@@ -72,9 +72,13 @@ namespace RainbowJudgement
 
         // ---------------- 累加 / 重置 ----------------
 
-        /// <summary>按档位号累加一次判定（实时追加与回档重放共用同一条路径）</summary>
+        /// <summary>按档位号累加一次判定（实时追加与回档重放共用同一条路径）。
+        /// 自 v1.0.2 起**所有判定**都计入（含 PP 开外的 EP/LP/VE/VL/Too，它们按角度落到最高档"绿"），
+        /// 与平均判定颜色 / 平均绝对偏差 / X^n 的 r 三处口径完全一致。
+        /// 占位条目（Tier&lt;0，尖刺/激光等无判定数据）不进任何统计。</summary>
         public static void AddTier(int tier, double p)
         {
+            if (tier < 0) return;
             switch (tier)
             {
                 case TierPurple: Purple++; break;
@@ -104,12 +108,42 @@ namespace RainbowJudgement
             LastJudge.Clear();
         }
 
-        // ---------------- 原版完美绿 ----------------
+        // ---------------- 计数器 / X^n 的 4 档颜色 ----------------
+
+        /// <summary>
+        /// 7 档计数器与 X^n 共用的 4 档颜色，按**彩虹映射**取色：
+        ///   0 档（紫，全在 1/3PP 内 / 计数器 A）      → 400nm
+        ///   1 档（青，到 0.5PP / 计数器 B C）         → 440nm
+        ///   2 档（蓝，到 2/3PP / 计数器 D E）         → 480nm
+        ///   3 档（完美绿，到 PP / 计数器 F G）        → **原版完美绿**（RDConstants 读游戏资源，刻意不走映射）
+        /// 这样计数器数字、X^n 的颜色与场景内 tick/文字随同一套映射变化。
+        /// </summary>
+        public static Color32 TierRgb(int index)
+        {
+            switch (index)
+            {
+                case 0: return Spectrum.WavelengthToRgb(400.0);
+                case 1: return Spectrum.WavelengthToRgb(440.0);
+                case 2: return Spectrum.WavelengthToRgb(480.0);
+                default: return GetPerfectGreenColor();
+            }
+        }
+
+        /// <summary>同上，输出 "RRGGBB"（供 TMP 富文本 &lt;color=#...&gt; 使用）</summary>
+        public static string TierHex(int index)
+        {
+            if (index >= 3) return PerfectGreenHex; // 原版完美绿
+            return Spectrum.ToHex(TierRgb(index));
+        }
+
+        // ---------------- 原版完美绿（计数器 F/G 与 X^n 第 3 档） ----------------
 
         private static string _greenHex = "5FFF4E"; // 原版完美绿 fallback
         private static bool _greenLoaded;
 
-        /// <summary>原版完美绿（供 X^n 档位色使用），运行时读 RDConstants.hitMarginColoursUI.colourPerfect</summary>
+        /// <summary>原版完美绿，运行时读 RDConstants.hitMarginColoursUI.colourPerfect。
+        /// **只用于计数器那两个数字（F/G）与 X^n 第 3 档的 "X"** —— 这一档保持原版观感、刻意不走彩虹映射；
+        /// 其余场景颜色（tick / 判定文字 / 平均判定色块）一律走 Spectrum 的波长映射。</summary>
         public static Color32 GetPerfectGreenColor()
         {
             EnsureGreenHex();
