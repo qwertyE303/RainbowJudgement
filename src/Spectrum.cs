@@ -14,6 +14,8 @@ namespace RainbowJudgement
     {
         public const double MinWavelengthNm = 380.0;   // 可见光谱最短波长（紫端）
         public const double MaxWavelengthNm = 780.0;   // 可见光谱最长波长（红）
+        /// <summary>仪表盘渐变的满刻度波长（= 纯红）</summary>
+        public const double FullScaleRedNm = 700.0;
 
         /// <summary>渐变跨度：380nm(紫端) → 700nm(纯红) 的映射区间</summary>
         private const double GradientSpanNm = 320.0;
@@ -71,6 +73,51 @@ namespace RainbowJudgement
         public static string ToHex(Color32 c)
         {
             return string.Format("{0:X2}{1:X2}{2:X2}", c.r, c.g, c.b);
+        }
+
+        /// <summary>
+        /// 玩家**自定义颜色**用的"物理版"波长映射：
+        ///   · [380, 700]（仪表盘的渐变跨度）之内与 <see cref="WavelengthToRgb"/> 逐位一致 ——
+        ///     这是本 Mod 的颜色语言，所以默认的 400/440/480nm 与原来完全相同；
+        ///   · 区间之外**不再线性衰减**，改成按人眼明视觉相对灵敏度 V(λ) 的真实比值衰减：
+        ///     λ &lt; 380 时乘 V(λ)/V(380)，λ &gt; 700 时乘 V(λ)/V(700)。
+        ///     于是"看不见的波长自然趋黑"，而且不需要任何人为挑的衰减区间/指数。
+        /// 仪表盘那条渐变只用 [380,700]，完全不受这里影响。
+        /// </summary>
+        public static Color32 InputWavelengthToRgb(double lambdaNm)
+        {
+            if (double.IsNaN(lambdaNm)) return new Color32(0, 0, 0, 255);
+
+            double factor = 1.0;
+            if (lambdaNm < MinWavelengthNm) factor = LuminousEfficiency(lambdaNm) / LuminousEfficiency(MinWavelengthNm);
+            else if (lambdaNm > FullScaleRedNm) factor = LuminousEfficiency(lambdaNm) / LuminousEfficiency(FullScaleRedNm);
+
+            if (double.IsNaN(factor) || factor <= 0.0) return new Color32(0, 0, 0, 255);
+            if (factor >= 1.0) return WavelengthToRgb(lambdaNm);
+
+            Color32 c = WavelengthToRgb(lambdaNm);
+            return new Color32(
+                (byte)Math.Round(c.r * factor),
+                (byte)Math.Round(c.g * factor),
+                (byte)Math.Round(c.b * factor),
+                255);
+        }
+
+        /// <summary>
+        /// 人眼明视觉相对灵敏度 V(λ)（相对 555nm），用 Wyman/Sloan/Shirley (JCGT 2013) 的双峰高斯拟合。
+        /// 只拿来做**亮度**衰减，不参与色相，所以拟合误差（尾部约 10%）完全够用。
+        /// </summary>
+        public static double LuminousEfficiency(double lambdaNm)
+        {
+            return 0.821 * Gaussian(lambdaNm, 568.8, 46.9, 40.5)
+                 + 0.286 * Gaussian(lambdaNm, 530.9, 16.3, 31.1);
+        }
+
+        private static double Gaussian(double x, double mu, double sigmaBefore, double sigmaAfter)
+        {
+            double sigma = x < mu ? sigmaBefore : sigmaAfter;
+            double t = (x - mu) / sigma;
+            return Math.Exp(-0.5 * t * t);
         }
 
         /// <summary>解析 "RRGGBB"（可带 #），失败返回 fallback</summary>

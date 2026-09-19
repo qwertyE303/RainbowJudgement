@@ -7,7 +7,7 @@ namespace RainbowJudgement
     /// 避免以后被误当成同一件事合并掉。均沿用系统区域设置（与原实现一致）。</summary>
     public static class Fmt
     {
-        /// <summary>结果页的平均绝对偏差(ms)：≥100→0 位小数、≥10→1 位、≥1→2 位、否则 3 位</summary>
+        /// <summary>结果页的平均绝对时间偏差(ms)：≥100→0 位小数、≥10→1 位、≥1→2 位、否则 3 位</summary>
         public static string Sig3Ms(double ms)
         {
             double abs = Math.Abs(ms);

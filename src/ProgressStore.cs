@@ -21,13 +21,18 @@ namespace RainbowJudgement
     public static class ProgressStore
     {
         private const string FileName = "rainbow_judgement.sav";
-        private const int FormatVersion = 1;
+        private const int FormatVersion = 2;
 
         /// <summary>每格判定的字段顺序（写进文件头，方便人工查看）。
-        /// 注意：第 2 列 "isPerfect" 是历史列名，v1.0.2 起写的是「是否落在原版完美窗口内」(InPure)——
-        /// 保持列序号不变，老存档仍可读（老档里该列为"游戏判定==Perfect/Auto"，语义最接近，一并按 InPure 处理）；
-        /// 老档中完美窗口外的那些条目会少计一次 F~G，再存一次档即精确。</summary>
-        private static readonly string[] Fields = { "hasData", "isPerfect", "isAuto", "tier", "lambda", "timeMs", "p" };
+        /// 前 7 列与 v1 完全一致（老存档可直接读）；第 8 列起是 v2 追加的**几何数据**，
+        /// 有了它才能按当前档位定义对历史判定重算颜色与计数（见 HitRecord）。
+        /// 注意：第 2 列 "isPerfect" 是历史列名，写的是「是否落在原版完美窗口内」(InPure)，
+        /// 保持列序号不变，老存档仍可读。</summary>
+        private static readonly string[] Fields =
+        {
+            "hasData", "isPerfect", "isAuto", "tier", "lambda", "timeMs", "p",
+            "deltaDeg", "posPerDeg", "aScale", "bScale", "ppDeg", "pureDeg", "practiceScale"
+        };
 
         // ---------------- 路径 ----------------
 
@@ -126,6 +131,13 @@ namespace RainbowJudgement
                 row.Add(r.Lambda);
                 row.Add(r.TimeMs);
                 row.Add(r.P);
+                row.Add(r.DeltaDeg);
+                row.Add(r.PosPerDeg);
+                row.Add(r.AScale);
+                row.Add(r.BScale);
+                row.Add(r.PpDeg);
+                row.Add(r.PureDeg);
+                row.Add(r.PracticeScale);
                 rows.Add(row);
             }
 
@@ -214,7 +226,8 @@ namespace RainbowJudgement
             {
                 Dictionary<string, object> root = GDMiniJSON.Json.Deserialize(File.ReadAllText(path, Encoding.UTF8)) as Dictionary<string, object>;
                 if (root == null) return null;
-                if (ToInt(Get(root, "version")) != FormatVersion) return null;
+                int version = ToInt(Get(root, "version"));
+                if (version != 1 && version != FormatVersion) return null;
 
                 level = ToString(Get(root, "level"));
                 fingerprint = ToString(Get(root, "fingerprint"));
@@ -223,22 +236,33 @@ namespace RainbowJudgement
                 if (rows == null) return null;
 
                 List<HitRecord> list = new List<HitRecord>(rows.Count);
+                int legacy = 0;
                 for (int i = 0; i < rows.Count; i++)
                 {
                     List<object> row = rows[i] as List<object>;
-                    if (row == null || row.Count < Fields.Length) continue;
+                    if (row == null || row.Count < 7) continue;
 
                     HitRecord r = default(HitRecord);
                     r.HasData = ToInt(row[0]) != 0;
-                    r.InPure = ToInt(row[1]) != 0;   // 列名 isPerfect，v1.0.2 起语义 = InPure
-                    r.IsPerfect = r.InPure;
+                    r.InPure = ToInt(row[1]) != 0;   // 列名 isPerfect，语义 = InPure
                     r.IsAuto = ToInt(row[2]) != 0;
                     r.Tier = ToInt(row[3]);
                     r.Lambda = ToDouble(row[4]);
                     r.TimeMs = ToDouble(row[5]);
                     r.P = ToDouble(row[6]);
+                    if (row.Count > 7) r.DeltaDeg = ToDouble(row[7]);
+                    if (row.Count > 8) r.PosPerDeg = ToDouble(row[8]);
+                    if (row.Count > 9) r.AScale = ToDouble(row[9]);
+                    if (row.Count > 10) r.BScale = ToDouble(row[10]);
+                    if (row.Count > 11) r.PpDeg = ToDouble(row[11]);
+                    if (row.Count > 12) r.PureDeg = ToDouble(row[12]);
+                    if (row.Count > 13) r.PracticeScale = ToDouble(row[13]);
+                    if (row.Count <= 7 && r.HasData) legacy++;
                     list.Add(r);
                 }
+                if (legacy > 0)
+                    Logger.Warn("[RainbowProgress] " + path + " 是 v1 老存档：其中 " + legacy
+                        + " 条没有角度数据 → 角度偏差与自定义判定计数按 0 计，再存一次档即精确");
                 return list;
             }
             catch (Exception ex)

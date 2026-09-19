@@ -4,80 +4,53 @@ using UnityEngine;
 namespace RainbowJudgement
 {
     /// <summary>
-    /// 判定相关的数学：档位边界角、锚点位置、锚点间渐变、角度↔时间换算。
-    /// 全部与原版 GetHitMargin / GetAdjustedAngleBoundaryInDeg 同构。
+    /// 判定相关的运行期数学：角度↔时间换算、原版边界角、7 档边界的刻度换算。
+    /// 与原版 <c>scrMisc.GetHitMargin</c> / <c>GetAdjustedAngleBoundaryInDeg</c> / <c>TimeToAngleInRad</c> 同构：
+    ///   角度(度) = 时间(ms) × bpm×speed×pitch×3 / 1000
+    ///   边界角   = max(角度下限 × marginScale, 时间下限对应角度)   （PP/Pure 的时间下限按 currentSpeedTrial 折算并下限 25ms）
+    /// 坐标系一律使用**仪表盘的 60 刻度**（60 = 原版 Counted 边界），见 <see cref="GradientFrame"/>。
     /// </summary>
     public static class RainbowMath
     {
-        /// <summary>仪表盘的满刻度（原版把 Counted 边界画在 ±60 处）</summary>
-        public const float CountedScaled = 60f;
-        /// <summary>紫端波长（= Spectrum.MinWavelengthNm，这里只做单个来源转发，别再各自写 380.0）</summary>
-        public const double MinWavelengthNm = Spectrum.MinWavelengthNm;
-        /// <summary>红端波长（仪表盘渐变的 100% 位置）</summary>
-        public const double RedWavelengthNm = 700.0;
-        /// <summary>红端颜色：**在运行时由颜色映射算出来**，保证 700nm 永远等于"当前映射下的纯红"
-        /// （旧实现硬编码 (255,0,0)，一旦调整亮度曲线就会与映射脱节）。</summary>
-        public static readonly Color32 RedColor = Spectrum.WavelengthToRgb(RedWavelengthNm);
-
-        /// <summary>档位下标：0=1/3PP 1=0.5PP 2=2/3PP 3=PP 4=EP/LP 5=Counted</summary>
-        public const int Tier1Of3PP = 0;
-        public const int TierHalfPP = 1;
-        public const int Tier2Of3PP = 2;
-        public const int TierPP = 3;
-        public const int TierELP = 4;
-        public const int TierCounted = 5;
-
-        /// <summary>各档位的角度下限(度)——与 game 判定区间同构</summary>
-        private static readonly double[] TierBaseDeg = { 10.0, 15.0, 20.0, 30.0, 45.0 };
-        /// <summary>各档位的时间下限(秒)——低 BPM 下角度不足时由时间决定</summary>
-        private static readonly double[] TierBaseSec = { 0.0075, 0.0125, 0.01667, 0.02, 0.03 };
-
-        /// <summary>锚点固定波长(nm)：极低 bpm 下各档位边界在仪表盘(线性 380~700)上的对应色</summary>
-        private static readonly double[] AnchorWavelength = BuildAnchorWavelength();
-
-        private static double[] BuildAnchorWavelength()
-        {
-            double[] w = new double[6];
-            for (int i = 0; i < 5; i++) w[i] = MinWavelengthNm + (RedWavelengthNm - MinWavelengthNm) * TierBaseDeg[i] / CountedScaled;
-            w[5] = RedWavelengthNm;
-            return w;
-        }
+        /// <summary>仪表盘满刻度（原版把 Counted 边界画在 ±60 处）</summary>
+        public const double CountedScaled = 60.0;
+        /// <summary>红端波长（仪表盘渐变的 100% 位置，= Spectrum.FullScaleRedNm）</summary>
+        public const double RedWavelengthNm = Spectrum.FullScaleRedNm;
+        /// <summary>原版 Perfect 边界的名义角度(度) —— 只用于取"该档锚点色"（位置另按游戏实际边界算）</summary>
+        public const double PerfectNominalDeg = 30.0;
+        /// <summary>原版 Pure（稍快/稍晚）边界的名义角度(度)</summary>
+        public const double PureNominalDeg = 45.0;
 
         // ---------------- 速度 / 时间基准 ----------------
 
-        /// <summary>当前速度：与游戏 GetAdjustedAngleBoundaryInDeg 一致（currentSpeedTrial 优先，回退 prevfloor.speed）</summary>
-        public static double GetCurrentSpeed()
+        /// <summary>每 1 毫秒误差对应多少度 = bpm×speed×pitch×3 / 1000（与 TimeToAngleInRad 逐位一致）</summary>
+        public static double DegPerMs(double bpmTimesSpeed, double conductorPitch)
+        {
+            double value = bpmTimesSpeed * conductorPitch * 3.0 / 1000.0;
+            if (double.IsNaN(value) || value <= 0.0000001) return 0.0;
+            return value;
+        }
+
+        /// <summary>误差角度(度，取绝对值) → 误差时间(ms)</summary>
+        public static double TimeMsOfDeg(double absDeg, double bpmTimesSpeed, double conductorPitch)
+        {
+            double perMs = DegPerMs(bpmTimesSpeed, conductorPitch);
+            if (perMs <= 0.0000001) return 0.0;
+            return absDeg / perMs;
+        }
+
+        /// <summary>练习速度（currentSpeedTrial）：原版把各档的时间下限除以它，低速练习时窗口会变宽</summary>
+        public static double PracticeSpeed()
         {
             try
             {
-                double speed = GCS.currentSpeedTrial;
-                if (speed <= 0.0001)
-                {
-                    scrController ctrl = scrController.instance;
-                    if (ctrl != null && ctrl.playerOne != null && ctrl.playerOne.currFloor != null && ctrl.playerOne.currFloor.prevfloor != null)
-                        speed = ctrl.playerOne.currFloor.prevfloor.speed;
-                    if (speed <= 0.0001) speed = 1.0;
-                }
-                return speed;
+                double value = GCS.currentSpeedTrial;
+                return value > 0.0001 ? value : 1.0;
             }
             catch { return 1.0; }
         }
 
-        /// <summary>Counted 时间下限(ms)：随难度 40/65/91ms，除以当前速度，绝对下限 25ms（与游戏一致）</summary>
-        public static double CountedTimeMs()
-        {
-            try
-            {
-                double t = 0.065;
-                int difficulty = (int)GCS.difficulty;
-                if (difficulty == 0) t = 0.091;
-                else if (difficulty == 2) t = 0.04;
-                return Math.Max(t / GetCurrentSpeed(), 0.025) * 1000.0;
-            }
-            catch { return 65.0; }
-        }
-
-        /// <summary>复刻原版 AddHit 的 speed 取值：hitFloor.speed → playerOne.prevfloor.speed → 1</summary>
+        /// <summary>复刻原版 AddHit / CalculateTickColor 的 speed 取值：hitFloor.speed → playerOne.prevfloor.speed → 1</summary>
         public static float GameSpeedOf(scrFloor hitFloor)
         {
             try
@@ -104,81 +77,68 @@ namespace RainbowJudgement
             catch { return 1.0; }
         }
 
-        /// <summary>缩放角度 → 真实误差时间(ms)：缩放/60×CountedDeg→真实角度→时间（角速度系数3，基准=判定瞬间）</summary>
-        public static double TimeMsFromScaledAngleAccurate(float scaledAngle, double countedDeg, double bpmTimesSpeed, double conductorPitch)
+        // ---------------- 原版边界角（直接用游戏自己的函数，保证与判定分类逐位一致） ----------------
+
+        /// <summary>Counted 边界角(度)：max(HITMARGIN_COUNTED×marginScale, 时间下限对应角度)</summary>
+        public static double CountedBoundaryDeg(double bpmTimesSpeed, double conductorPitch, double marginScale)
         {
-            double angleSpeed = bpmTimesSpeed * conductorPitch * 3.0; // 1拍=180°，与 TimeToAngleInRad 系数一致
-            if (double.IsNaN(angleSpeed) || angleSpeed <= 0.0001) return 0.0;
-            if (double.IsNaN(countedDeg) || countedDeg <= 0.0001) return 0.0;
-            double realAngle = scaledAngle / (double)CountedScaled * countedDeg;
-            if (double.IsNaN(realAngle)) return 0.0;
-            return realAngle / angleSpeed * 1000.0;
+            return GameBoundary(HitMarginGeneral.Counted, bpmTimesSpeed, conductorPitch, marginScale, 60.0, 0.065);
         }
 
-        // ---------------- 档位边界 / 渐变 ----------------
-
-        /// <summary>档位边界角度(度)：max(角度下限×mult, 时间下限对应角度)。与原版 PureDeg/PerfectDeg 同构，用游戏自身的方法算。</summary>
-        public static double LevelBoundaryDeg(int levelIndex, double bpmTimesSpeed, double conductorPitch, double marginScale)
+        /// <summary>Pure 边界角(度)：PP 之外那一档（稍快!/稍晚!）的外边界，原版取 45° / 30ms</summary>
+        public static double PureBoundaryDeg(double bpmTimesSpeed, double conductorPitch, double marginScale)
         {
-            if (levelIndex < 0 || levelIndex >= TierCounted)
-                return scrMisc.GetAdjustedAngleBoundaryInDeg(HitMarginGeneral.Counted, bpmTimesSpeed, conductorPitch, marginScale);
+            // 原版 HitMarginGeneral 的命名与边界交叉：Perfect=1 给 45°，Pure=2 给 30°
+            return GameBoundary(HitMarginGeneral.Perfect, bpmTimesSpeed, conductorPitch, marginScale, 45.0, 0.03);
+        }
 
-            double timeSec = TierBaseSec[levelIndex];
-            double baseDeg = TierBaseDeg[levelIndex];
+        /// <summary>Perfect 边界角(度)：原版 PP 边界，30° / 20ms（PP 与 EP/LP 的分界）</summary>
+        public static double PerfectBoundaryDeg(double bpmTimesSpeed, double conductorPitch, double marginScale)
+        {
+            return GameBoundary(HitMarginGeneral.Pure, bpmTimesSpeed, conductorPitch, marginScale, 30.0, 0.02);
+        }
 
-            if (levelIndex == TierPP || levelIndex == TierELP)
+        /// <summary>交给游戏算；失败时回退到同构公式（角度下限 × marginScale 与时间下限对应角度取大）</summary>
+        private static double GameBoundary(HitMarginGeneral kind, double bpmTimesSpeed, double conductorPitch,
+            double marginScale, double baseDeg, double baseSec)
+        {
+            try
             {
-                // PP/ELP 的时间下限按"练习速度"折算（=原版 PureDeg/PerfectDeg 的 currentSpeedTrial）
-                double trial = GCS.currentSpeedTrial;
-                if (trial <= 0.0001) trial = 1.0;
-                timeSec = Math.Max(timeSec / trial, 0.025);
+                double value = scrMisc.GetAdjustedAngleBoundaryInDeg(kind, bpmTimesSpeed, conductorPitch, marginScale);
+                if (!double.IsNaN(value) && value > 0.0) return value;
             }
+            catch { }
 
-            double timeAngle = scrMisc.TimeToAngleInRad(timeSec, bpmTimesSpeed, conductorPitch, false) * 57.29578;
-            return Math.Max(baseDeg * marginScale, timeAngle);
+            double trial = 1.0;
+            try { if (GCS.currentSpeedTrial > 0.0001f) trial = GCS.currentSpeedTrial; }
+            catch { }
+            double timeSec = kind == HitMarginGeneral.Counted ? baseSec : baseSec / trial;
+            timeSec = Math.Max(timeSec, 0.025);
+            double timeDeg = timeSec * 1000.0 * DegPerMs(bpmTimesSpeed, conductorPitch);
+            return Math.Max(baseDeg * marginScale, timeDeg);
         }
 
-        /// <summary>档位锚点位置(缩放坐标)：边界角度×60/countedDeg（与原版分档边界缩放同构）</summary>
-        public static double LevelAnchorPosition(int levelIndex, double countedDeg, double bpmTimesSpeed, double conductorPitch, double marginScale)
+        // ---------------- 固定 7 档（紫 / 青 / 蓝 / PP）的边界刻度 ----------------
+
+        /// <summary>固定 7 档的角度下限(度)：紫 / 青 / 蓝（PP 用原版 Perfect 边界）</summary>
+        private static readonly double[] FixedDeg = { 10.0, 15.0, 20.0 };
+        /// <summary>固定 7 档的时间下限(ms)：紫 / 青 / 蓝（这三档不按 currentSpeedTrial 折算，与原实现一致）</summary>
+        private static readonly double[] FixedMs = { 7.5, 12.5, 16.67 };
+
+        /// <summary>固定 7 档边界（刻度）：0=紫 1=青 2=蓝；3=PP（用原版 Perfect 边界）</summary>
+        public static double FixedTierScaled(int level, GradientFrame frame)
         {
-            if (double.IsNaN(countedDeg) || countedDeg <= 0.0001) return 0.0;
-            double boundaryDeg = LevelBoundaryDeg(levelIndex, bpmTimesSpeed, conductorPitch, marginScale);
-            if (double.IsNaN(boundaryDeg)) return 0.0;
-            return boundaryDeg * CountedScaled / countedDeg;
+            if (level >= 3) return frame.PpScaled;
+            return Math.Max(FixedDeg[level] * frame.AScale, FixedMs[level] * frame.BScale);
         }
 
-        /// <summary>档位锚点色(0..5) = 433.3/460/486.7/540/620/700nm 经**全局颜色映射**得到的颜色。
-        /// 与 tick 颜色、平均判定色块、X^n 颜色同源，所以调整亮度/浅化时会一起变。</summary>
-        public static Color32 TierColor(int tier)
+        /// <summary>7 档分档（纯函数，不累加）：a1/a2/a3 = 紫/青/蓝 的边界刻度</summary>
+        public static int TierOf(double absScaled, bool isEarly, double a1, double a2, double a3)
         {
-            if (tier < 0 || tier > 5) return Spectrum.WavelengthToRgb(RedWavelengthNm);
-            return Spectrum.WavelengthToRgb(AnchorWavelength[tier]);
-        }
-
-        /// <summary>锚点间线性渐变：pos=缩放刻度；锚点位置=LevelBoundaryDeg×60/countedDeg；锚点色=AnchorWavelength 固定</summary>
-        public static double WavelengthForGradient(double pos, double countedDeg, double bpmTimesSpeed, double conductorPitch, double marginScale)
-        {
-            double[] anchors = new double[6];
-            for (int i = 0; i < 6; i++) anchors[i] = LevelAnchorPosition(i, countedDeg, bpmTimesSpeed, conductorPitch, marginScale);
-
-            double pMax = anchors[5];
-            if (pMax <= 0.0001) pMax = CountedScaled;
-            if (pos >= pMax) return RedWavelengthNm;
-
-            double w0 = MinWavelengthNm;
-            for (int i = 0; i < 6; i++)
-            {
-                double w1 = AnchorWavelength[i];
-                double a0 = i == 0 ? 0.0 : anchors[i - 1];
-                if (pos <= anchors[i] || i == 5)
-                {
-                    double span = anchors[i] - a0;
-                    double t = span <= 0.0001 ? 1.0 : Math.Min((pos - a0) / span, 1.0);
-                    return w0 + (w1 - w0) * t;
-                }
-                w0 = w1;
-            }
-            return RedWavelengthNm;
+            if (absScaled <= a1) return RainbowCounter.TierPurple;
+            if (absScaled <= a2) return isEarly ? RainbowCounter.TierCyanEarly : RainbowCounter.TierCyanLate;
+            if (absScaled <= a3) return isEarly ? RainbowCounter.TierBlueEarly : RainbowCounter.TierBlueLate;
+            return isEarly ? RainbowCounter.TierGreenEarly : RainbowCounter.TierGreenLate;
         }
     }
 }

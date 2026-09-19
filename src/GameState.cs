@@ -74,27 +74,9 @@ namespace RainbowJudgement
             }
         }
 
-        /// <summary>游戏计入的"原版完美窗口内"条数 = Perfect + EarlyPerfect + LatePerfect。
-        /// 对应本 Mod 7 档计数器（紫/青/蓝/绿）的统计范围——超过 PP 边界的 EP/LP 虽然也带角度数据，
-        /// 但不该被算进新增档位的"完美"里（v1.0.2 用户明确要求）。</summary>
-        public static int PureCount
-        {
-            get
-            {
-                scrMarginTracker t = PlayerTracker;
-                try
-                {
-                    return t != null
-                        ? t.GetHits(HitMargin.Perfect) + t.GetHits(HitMargin.EarlyPerfect) + t.GetHits(HitMargin.LatePerfect)
-                        : 0;
-                }
-                catch { return 0; }
-            }
-        }
-
         /// <summary>"有判定数据"的判定条数 = hitMargins.Count − 故障类（Multipress/FailMiss/FailOverload/OverPress）。
         /// 这四种只会由尖刺/激光/多按/Overspress 触发（没有 GetHitMargin、没有角度误差），
-        /// 所以 Mod 账本里它们是占位条目；其余条数都应参与统计（v1.0.2 口径）。</summary>
+        /// 所以 Mod 账本里它们是占位条目；其余条数都应参与统计。</summary>
         public static int CountableCount
         {
             get

@@ -18,8 +18,8 @@ namespace RainbowJudgement
                 try
                 {
                     if (__instance == null || __instance.text == null) return;
-                    double wavelength = RainbowMath.WavelengthForGradient(
-                        LastJudge.ScaledPos, LastJudge.CountedDeg, LastJudge.BpmTimesSpeed, LastJudge.Pitch, LastJudge.MarginScale);
+                    // 与 tick 同一个位移刻度 + 同一套锚点表 → 判定文字颜色与 tick 永远一致
+                    double wavelength = AnchorSet.WavelengthAt(LastJudge.ScaledPos, LastJudge.Frame);
                     Color rainbow = Spectrum.WavelengthToRgb(wavelength);
                     rainbow.a = __instance.text.color.a; // 保留原 alpha（淡出动画控制）
                     __instance.text.color = rainbow;
@@ -71,7 +71,7 @@ namespace RainbowJudgement
                         exponent = n < 1.0 ? n.ToString("F2") : Fmt.Sig3N(n);
                     }
 
-                    Color32 color = XColor(RainbowCounter.GetXColorIndex());
+                    Color32 color = XColor();
                     string hex = Spectrum.ToHex(color);
                     Logger.Log("[FlawlessX] before=[" + text.Replace("\n", "\\n") + "] flawless=[" + flawless
                         + "] rich=" + __instance.txtCongrats.supportRichText + " fs=" + __instance.txtCongrats.fontSize
@@ -89,12 +89,21 @@ namespace RainbowJudgement
                 }
             }
 
-            /// <summary>X^n 的颜色档位：按"本局打到的最好档位"取 4 色之一（档位判定规则未变）。
-            ///   · 0/1/2 档 → **彩虹映射**下的 400nm / 440nm / 480nm（与计数器 7 个数字同一套，见 RainbowCounter.TierRgb）
-            ///   · 3 档（打到 PP/完美绿）→ **保持游戏原版完美绿**，与计数器 F/G 同色</summary>
-            private static Color32 XColor(int index)
+            /// <summary>X^n 的颜色跟随玩家自定义颜色：取"含全部判定的那一档"（有计数的最宽档）的数字色。
+            /// 有一条判定比最宽档还宽（没落进任何档）时，说明没有哪一档能包含全部判定 → 用原版完美绿；
+            /// 一条自定义档位都没有时同理。比原版 PP 更宽的档不会被取到：X^n 只在全部落在 PP 内时才出现。</summary>
+            private static Color32 XColor()
             {
-                return RainbowCounter.TierRgb(index);
+                if (CustomCounter.OutOfRange == 0)
+                {
+                    int index = CustomCounter.WidestUsedIndex();
+                    if (index >= 0)
+                    {
+                        CustomTierDef tier = CustomJudge.EnabledAt(index);
+                        if (tier != null) return CustomJudge.DigitColor(tier);
+                    }
+                }
+                return RainbowCounter.GetPerfectGreenColor();
             }
         }
 

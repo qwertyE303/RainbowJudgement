@@ -27,7 +27,6 @@ namespace RainbowJudgement
         private static bool _opened;
 
         public static string FilePath { get { return _file == null ? "" : _file; } }
-        public static string Dir { get { return _dir == null ? "" : _dir; } }
 
         // ---------------- 初始化 ----------------
 

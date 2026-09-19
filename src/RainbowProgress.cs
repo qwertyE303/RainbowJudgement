@@ -4,28 +4,47 @@ using UnityEngine;
 
 namespace RainbowJudgement
 {
-    /// <summary>一次判定。与游戏 scrMarginTracker.hitMargins 索引一一对应（同长同序）。</summary>
+    /// <summary>一次判定。与游戏 <c>scrMarginTracker.hitMargins</c> 索引一一对应（同长同序）。</summary>
     public struct HitRecord
     {
         /// <summary>false = 该条计数没有判定数据（尖刺/激光等 FailMiss）</summary>
         public bool HasData;
-        /// <summary>【旧字段】v1.0.2 起与 <see cref="InPure"/> 同义，保留是为了不改动已落盘 `.sav` 的列序号
-        /// （第 2 列原本是"游戏判定为 Perfect/Auto"，现在写"是否落在原版完美窗口内"）。</summary>
-        public bool IsPerfect;
+        /// <summary>是否落在**原版完美窗口**（PP 边界）之内 —— 只有它为 true 才进 7 档计数器与 X^n 的 r；
+        /// 平均判定颜色 / 平均绝对时间偏差 / 平均绝对角度偏差则是所有 HasData 的判定都算（两套范围，刻意分开）。</summary>
+        public bool InPure;
         /// <summary>本次判定是否 auto 触发（官方 autoplay / 自动砖块）</summary>
         public bool IsAuto;
         /// <summary>0~6（见 RainbowCounter.Tier*）；-1 = 无档位（占位条目，或完美窗口之外）</summary>
         public int Tier;
         /// <summary>波长 nm</summary>
         public double Lambda;
-        /// <summary>误差时间 ms（带符号，重放时取绝对值）</summary>
+        /// <summary>误差时间 ms（带符号）</summary>
         public double TimeMs;
         /// <summary>归一化完美度 = |角度|/θ_PP（仅完美窗口内有意义，0~1；窗口外恒为 0）</summary>
         public double P;
-        /// <summary>是否落在**原版完美窗口**（PP 边界）之内 —— 只有它为 true 才进 7 档计数器与 X^n 的 r；
-        /// 平均判定颜色 / 平均绝对偏差则是所有 HasData 的判定都算（两套范围，刻意分开）。
-        /// 另一个字段 `IsPerfect` 只是它的别名，用来维持落盘列序不变。</summary>
-        public bool InPure;
+
+        // ---------------- 几何数据（v2 落盘列）----------------
+        // 有了这几个量，任意时刻都能按**当前**的档位定义与锚点表把这条判定精确重算一遍
+        // （改档位立即影响全部历史判定），而不必依赖"重放时的游戏状态"。
+        // PosPerDeg <= 0 表示来自老存档（v1）：回退到上面那几列判定瞬间的快照值。
+
+        /// <summary>带符号角度误差（度）；early &lt; 0，late &gt; 0，auto = 0</summary>
+        public double DeltaDeg;
+        /// <summary>每 1 度误差对应多少刻度 = 60 / Counted边界角</summary>
+        public double PosPerDeg;
+        /// <summary>marginScale × PosPerDeg（自定义档位边界用）</summary>
+        public double AScale;
+        /// <summary>每 1ms 误差对应多少刻度 × PosPerDeg（自定义档位边界用）</summary>
+        public double BScale;
+        /// <summary>原版 Perfect（PP）边界角（度）</summary>
+        public double PpDeg;
+        /// <summary>原版 Pure（稍快/稍晚）边界角（度）</summary>
+        public double PureDeg;
+        /// <summary>判定瞬间的练习速度（currentSpeedTrial），用于重算自定义档位的时间项</summary>
+        public double PracticeScale;
+
+        /// <summary>是否带几何数据（false = 老存档条目，只能按判定瞬间的快照统计）</summary>
+        public bool HasGeometry { get { return PosPerDeg > 0.0001; } }
     }
 
     /// <summary>
@@ -36,8 +55,11 @@ namespace RainbowJudgement
     ///   · 续关：ProgressStore 负责把每格数据落盘/读回
     ///   · 关卡外（主界面/选歌/编辑器搭关）不采集：JudgeHooks 用 GameState.InGameWorld 挡住
     ///
-    /// 两套统计范围（v1.0.2 定稿）：
-    ///   · **全部有判定数据的判定**（包括完美窗口外的 EP/LP/VE/VL/Too）→ 平均判定颜色、平均绝对偏差
+    /// **一切派生统计都由账本重放得出**（含平均颜色、7 档、自定义档位计数），
+    /// 所以改档位定义 / 开关功能后只要 RebuildAll 就能得到"当前设置下的正确结论"。
+    ///
+    /// 两套统计范围：
+    ///   · **全部有判定数据的判定**（含 PP 边界外的 EP/LP/VE/VL/Too）→ 平均判定颜色、平均绝对时间/角度偏差
     ///   · **仅原版完美窗口内**（InPure）→ 7 档计数器（F A B C D E G）、X^n 的 r
     /// </summary>
     public static class RainbowProgress
@@ -47,6 +69,7 @@ namespace RainbowJudgement
         private static bool _pendingFresh;
         private static int _pendingFrame = -1;
         private static string _lastWarnKey;
+        private static bool _anchorLogged; // 每次关卡只打印一次锚点表（诊断用）
         private static int _counted;       // 参与统计的条数（有判定数据）
         private static int _countedInPure; // 其中落在原版完美窗口内的条数（7 档计数器 / X^n 的来源）
 
@@ -83,27 +106,73 @@ namespace RainbowJudgement
 
         // ---------------- 追加 / 截断 / 清空 ----------------
 
-        /// <summary>追加一条并同步更新聚合值（热路径，不分配）。
-        /// 颜色/偏差：所有有判定数据的都算；7 档计数器：只有完美窗口内（InPure）才算。</summary>
+        /// <summary>追加一条并同步更新派生统计（热路径，不分配）</summary>
         public static void Append(HitRecord record)
         {
             _hits.Add(record);
             if (record.HasData)
             {
+                if (!_anchorLogged && record.HasGeometry)
+                {
+                    _anchorLogged = true; // 本次关卡的锚点表 + 原版两个边界（默认档位下应与 v1.1.0 的锚点集一致）
+                    Logger.Log(AnchorSet.Describe(GradientFrame.FromRecord(record))
+                        + " | pp=" + record.PpDeg.ToString("F1") + "° pure=" + record.PureDeg.ToString("F1") + "°");
+                }
                 CountRecord(record);
             }
             CheckInvariant(false);
         }
 
-        /// <summary>把一条有效判定的数据计入聚合值（实时追加与回档重放共用同一条路径，保证口径一致）</summary>
+        /// <summary>
+        /// 把一条有效判定计入派生统计（实时追加与全量重放共用同一条路径，保证口径一致）。
+        /// 带几何数据的条目**按当前设置重算**（锚点色 / 7 档 / 自定义档位）；
+        /// 老存档条目按判定瞬间的快照值统计（没有角度数据，角度偏差记 0）。
+        /// </summary>
         private static void CountRecord(HitRecord r)
         {
             _counted++;
-            RainbowState.Add(r.Lambda, r.TimeMs);       // 平均判定颜色 / 平均绝对偏差：全部判定
-            if (r.InPure && r.Tier >= 0)
+
+            double lambda, timeMs, absDeg;
+            bool inPure;
+            int tier;
+            double p;
+
+            if (r.HasGeometry)
             {
-                _countedInPure++;                        // 7 档计数器 / X^n 的 r：仅原版完美窗口内
-                RainbowCounter.AddTier(r.Tier, r.P);
+                GradientFrame frame = GradientFrame.FromRecord(r);
+                double scaled = r.DeltaDeg * r.PosPerDeg;
+                double absScaled = Math.Abs(scaled);
+                absDeg = Math.Abs(r.DeltaDeg);
+
+                double perMs = r.PosPerDeg > 0.0001 ? r.BScale / r.PosPerDeg : 0.0;
+                lambda = AnchorSet.WavelengthAt(absScaled, frame);
+                timeMs = perMs > 0.0000001 ? absDeg / perMs : r.TimeMs;
+
+                inPure = absScaled <= frame.PpScaled;
+                tier = inPure
+                    ? RainbowMath.TierOf(absScaled, r.DeltaDeg < 0.0,
+                        RainbowMath.FixedTierScaled(0, frame),
+                        RainbowMath.FixedTierScaled(1, frame),
+                        RainbowMath.FixedTierScaled(2, frame))
+                    : -1;
+                p = r.PpDeg > 0.0001 ? absDeg / r.PpDeg : 0.0;
+                CustomCounter.Count(absScaled, r.DeltaDeg < 0.0, frame);
+            }
+            else
+            {
+                lambda = r.Lambda;
+                timeMs = r.TimeMs;
+                absDeg = 0.0;
+                inPure = r.InPure;
+                tier = r.InPure ? r.Tier : -1;
+                p = r.P;
+            }
+
+            RainbowState.Add(lambda, timeMs, absDeg);       // 平均颜色 / 平均绝对时间偏差 / 平均绝对角度偏差：全部判定
+            if (inPure && tier >= 0)
+            {
+                _countedInPure++;                            // 7 档计数器 / X^n 的 r：仅原版完美窗口内
+                RainbowCounter.AddTier(tier, p);
             }
         }
 
@@ -112,18 +181,21 @@ namespace RainbowJudgement
             _hits.Clear();
             _pendingFresh = false;
             _pendingFrame = -1;
+            _anchorLogged = false;
             _counted = 0;
             _countedInPure = 0;
             RainbowState.Reset();
             RainbowCounter.Reset();
-            CounterDisplay.Refresh();
+            CustomCounter.ResetCounts();
+            RefreshDisplay();
         }
 
-        /// <summary>从列表整体重放全部统计（回档/续关/对齐后调用）</summary>
+        /// <summary>从列表整体重放全部统计（回档/续关/对齐/改档位后调用）</summary>
         public static void RebuildAll()
         {
             RainbowState.Reset();
             RainbowCounter.ResetCounts();
+            CustomCounter.ResetCounts();
             _counted = 0;
             _countedInPure = 0;
             for (int i = 0; i < _hits.Count; i++)
@@ -132,8 +204,21 @@ namespace RainbowJudgement
                 if (!r.HasData) continue;
                 CountRecord(r);
             }
-            CounterDisplay.Refresh();
+            RefreshDisplay();
             CheckInvariant(true);
+        }
+
+        /// <summary>设置变化后刷新实时显示（只重绘，不重算）</summary>
+        public static void RefreshDisplay()
+        {
+            Logger.Guard("RainbowProgress/RefreshDisplay", delegate { LiveDisplay.Refresh(); });
+        }
+
+        /// <summary>档位定义变化：全量重算 + 刷新显示</summary>
+        public static void OnLayoutChanged()
+        {
+            CustomJudge.InvalidateLayout();
+            RebuildAll();
         }
 
         // ---------------- 与游戏状态同步 ----------------
@@ -232,7 +317,7 @@ namespace RainbowJudgement
 
         // ---------------- 自检 ----------------
 
-        /// <summary>不变量（v1.0.2 双范围口径）：
+        /// <summary>不变量：
         ///   ① 账本长度 == 游戏 hitMargins.Count
         ///   ② 参与统计条数 == 游戏可判定条数（条数 − 故障类）
         ///   ③ 7 档之和 == InPure 条数 == 游戏**严格 Perfect**(+Auto)

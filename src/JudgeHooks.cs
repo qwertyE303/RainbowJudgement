@@ -6,8 +6,9 @@ namespace RainbowJudgement
 {
     /// <summary>
     /// 判定采集 hooks。
-    /// 数据流：GetHitMargin 算出本次判定的分档/波长/时间/完美度并暂存 → scrMarginTracker.AddHit 消费并追加到账本。
-    /// 这样账本与游戏的 hitMargins 严格同长同序，且"实时累加"与"回档重放"共用同一份数据。
+    /// 数据流：GetHitMargin 算出本次判定的几何基准（60 刻度）并暂存 → scrMarginTracker.AddHit 消费并追加到账本。
+    /// 账本与游戏的 hitMargins 严格同长同序，且"实时累加"与"回档重放"共用同一份数据。
+    /// 颜色一律走 <see cref="AnchorSet"/>（锚点表由自定义档位 + 原版三档边界动态生成）。
     /// </summary>
     public static class JudgeHooks
     {
@@ -25,10 +26,10 @@ namespace RainbowJudgement
 
                     double bpmTimesSpeed = RainbowMath.GameBpmTimesSpeedOf(hitFloor);
                     double pitch = RainbowMath.GetPitchNow();
-                    double countedDeg = scrMisc.GetAdjustedAngleBoundaryInDeg(HitMarginGeneral.Counted, bpmTimesSpeed, pitch, marginScale);
-                    if (double.IsNaN(countedDeg) || countedDeg <= 0.0001) countedDeg = 60.0; // NaN 防御
+                    double countedDeg = RainbowMath.CountedBoundaryDeg(bpmTimesSpeed, pitch, marginScale);
+                    GradientFrame frame = GradientFrame.FromRuntime(countedDeg, marginScale, bpmTimesSpeed, pitch);
 
-                    double wavelength = RainbowMath.WavelengthForGradient(Math.Abs((double)angle), countedDeg, bpmTimesSpeed, pitch, marginScale);
+                    double wavelength = AnchorSet.WavelengthAt(angle, frame);
                     __result = Spectrum.WavelengthToRgb(wavelength);
 
                     Logger.Log("[TickColor] angle=" + angle.ToString("F2") + " countedDeg=" + countedDeg.ToString("F1")
@@ -39,7 +40,8 @@ namespace RainbowJudgement
             }
         }
 
-        /// <summary>DebugLog 交叉校验（日志由 Logger 自行门控）：仪表盘 tick 的原始角度误差（游戏值，auto 强制 0）应与我们算的 |delta| 一致</summary>
+        /// <summary>DebugLog 交叉校验（日志由 Logger 自行门控）：仪表盘 tick 的刻度（游戏值，auto 强制 0）
+        /// 应与我们算的判定位移刻度一致。两边都是 60 刻度，别拿度数去比。</summary>
         [HarmonyPatch(typeof(scrHitErrorMeter), "AddHit")]
         public static class TickAngleCrossCheckHook
         {
@@ -49,7 +51,7 @@ namespace RainbowJudgement
                 try
                 {
                     double meter = Math.Abs((double)angleDiff);
-                    double ours = LastJudge.RawDeg;
+                    double ours = LastJudge.ScaledPos;
                     if (Math.Abs(meter - ours) > 0.01)
                         Logger.Log("[TickAngleCheck] meter=" + meter.ToString("F3") + " ours=" + ours.ToString("F3"));
                 }
@@ -88,52 +90,49 @@ namespace RainbowJudgement
                     bool auto = LastJudge.AutoActive;
                     if (auto) delta = 0.0;
 
-                    double countedDeg = scrMisc.GetAdjustedAngleBoundaryInDeg(HitMarginGeneral.Counted, bpmTimesSpeed, conductorPitch, marginScale);
-                    if (double.IsNaN(countedDeg) || countedDeg <= 0.0001) countedDeg = 60.0;
+                    double countedDeg = RainbowMath.CountedBoundaryDeg(bpmTimesSpeed, conductorPitch, marginScale);
+                    GradientFrame frame = GradientFrame.FromRuntime(countedDeg, marginScale, bpmTimesSpeed, conductorPitch);
 
-                    // 判定瞬间基准（与 tick 刻度同源），供判定文字颜色使用
-                    LastJudge.CountedDeg = countedDeg;
-                    LastJudge.ScaledPos = Math.Abs(delta) * (double)RainbowMath.CountedScaled / countedDeg;
-                    LastJudge.BpmTimesSpeed = bpmTimesSpeed;
-                    LastJudge.Pitch = conductorPitch;
-                    LastJudge.MarginScale = marginScale;
-                    LastJudge.RawDeg = auto ? 0.0 : Math.Abs(delta);
-
-                    // 档位边界角 = max(角度下限×marginScale, 时间下限对应角度)，与原版同构
-                    double a1 = RainbowMath.LevelBoundaryDeg(RainbowMath.Tier1Of3PP, bpmTimesSpeed, conductorPitch, marginScale);
-                    double a2 = RainbowMath.LevelBoundaryDeg(RainbowMath.TierHalfPP, bpmTimesSpeed, conductorPitch, marginScale);
-                    double a3 = RainbowMath.LevelBoundaryDeg(RainbowMath.Tier2Of3PP, bpmTimesSpeed, conductorPitch, marginScale);
-                    // 原版完美边界（PP 边界）：7 档计数器的统计上限
-                    double ppDeg = RainbowMath.LevelBoundaryDeg(RainbowMath.TierPP, bpmTimesSpeed, conductorPitch, marginScale);
-                    double angleDeg = LastJudge.RawDeg;
+                    double absScaled = Math.Abs(delta) * frame.PosPerDeg;
+                    double absDeg = Math.Abs(delta);
 
                     HitRecord record = default(HitRecord);
                     record.HasData = true;
                     record.IsAuto = auto;
                     record.Tier = -1;
+                    record.DeltaDeg = delta;
+                    record.PosPerDeg = frame.PosPerDeg;
+                    record.AScale = frame.AScale;
+                    record.BScale = frame.BScale;
+                    record.PpDeg = frame.PosPerDeg > 0.0001 ? frame.PpScaled / frame.PosPerDeg : 0.0;
+                    record.PureDeg = frame.PosPerDeg > 0.0001 ? frame.PureScaled / frame.PosPerDeg : 0.0;
+                    record.PracticeScale = frame.PracticeScale;
 
-                    // 【统计范围】7 档计数器（F A B C D E G）只收「原版完美边界之内」的判定，
-                    // 也就是用户要的「原版完美边界 ~ 新增档位边界之内」这一档才叫新增出来的完美。
+                    // 【统计范围】7 档计数器（F A B C D E G）只收「原版完美边界之内」的判定。
                     // EP/LP（稍快！/稍晚！）、VE/VL、Too 都在 PP 边界之外 → 不进任何档位桶、不进 X^n 的 r
-                    // （它们仍然参与平均判定颜色与平均绝对偏差——那两处统计的是全部判定）。
-                    record.InPure = angleDeg <= ppDeg;
-                    record.IsPerfect = record.InPure; // 旧字段，落盘格式兼容（.sav 第 2 列）
+                    // （它们仍然参与平均判定颜色与平均绝对时间/角度偏差——那三处统计的是全部判定）。
+                    record.InPure = absScaled <= frame.PpScaled;
 
                     if (record.InPure)
                     {
-                        record.Tier = RainbowCounter.TierOf(angleDeg, delta < 0.0, a1, a2, a3);
+                        record.Tier = RainbowMath.TierOf(absScaled, delta < 0.0,
+                            RainbowMath.FixedTierScaled(0, frame),
+                            RainbowMath.FixedTierScaled(1, frame),
+                            RainbowMath.FixedTierScaled(2, frame));
                         // X^n 的 p：|角度| / PP 边界（auto 强制中间 → p=0 → n=∞）；只在完美窗口内才有意义（0~1）
-                        record.P = ppDeg > 0.0001
-                            ? angleDeg / (double)RainbowMath.CountedScaled * countedDeg / ppDeg
-                            : 0.0;
+                        record.P = record.PpDeg > 0.0001 ? absDeg / record.PpDeg : 0.0;
                     }
 
-                    // 平均判定颜色 / 平均绝对偏差：与 tick 同一套渐变，**全部判定**都算
-                    record.Lambda = RainbowMath.WavelengthForGradient(angleDeg, countedDeg, bpmTimesSpeed, conductorPitch, marginScale);
-                    record.TimeMs = RainbowMath.TimeMsFromScaledAngleAccurate((float)angleDeg, countedDeg, bpmTimesSpeed, conductorPitch);
+                    // 平均判定颜色 / 平均绝对时间偏差 / 平均绝对角度偏差：全部判定都算
+                    record.Lambda = AnchorSet.WavelengthAt(absScaled, frame);
+                    record.TimeMs = RainbowMath.TimeMsOfDeg(absDeg, bpmTimesSpeed, conductorPitch);
 
-                    Logger.Log("[GetMargin] " + __result + " delta=" + delta.ToString("F2") + " rawDeg=" + angleDeg.ToString("F2")
-                        + " tier=" + record.Tier + " countedDeg=" + countedDeg.ToString("F1") + " ppDeg=" + ppDeg.ToString("F1")
+                    LastJudge.ScaledPos = absScaled;
+                    LastJudge.Frame = frame;
+
+                    Logger.Log("[GetMargin] " + __result + " delta=" + delta.ToString("F2") + " absDeg=" + absDeg.ToString("F2")
+                        + " scaled=" + absScaled.ToString("F2") + " tier=" + record.Tier
+                        + " countedDeg=" + countedDeg.ToString("F1") + " ppDeg=" + record.PpDeg.ToString("F1")
                         + " wl=" + record.Lambda.ToString("F1") + "nm t=" + record.TimeMs.ToString("F2") + "ms p=" + record.P.ToString("F4")
                         + (record.InPure ? "" : "（完美窗口外：计入颜色/偏差，不计入 F~G 档位与 X^n）"));
 
@@ -148,7 +147,7 @@ namespace RainbowJudgement
 
         /// <summary>游戏计数入口：每次"判定被计入"追加一条（与 hitMargins 索引严格对齐）。
         /// 尖刺/激光等没有判定的计数（FailMiss 等）没有暂存数据 → 写占位条目，保证索引不错位。
-        /// v1.0.2：这里不再按 HitMargin 过滤统计——有暂存数据的按角度档位照单全收
+        /// 这里不按 HitMargin 过滤统计——有暂存数据的按几何量照单全收
         /// （游戏会把"没打在正中"的标成 EarlyPerfect/LatePerfect，那不该被丢掉）；
         /// 关卡外的判定（主界面/编辑器搭关）连同暂存一起丢弃，不进账本。</summary>
         [HarmonyPatch(typeof(scrMarginTracker), "AddHit")]
@@ -164,15 +163,8 @@ namespace RainbowJudgement
                     if (!RainbowProgress.IsPlayerOneTracker(__instance)) return;
 
                     HitRecord record;
-                    if (RainbowProgress.ConsumePending(out record))
-                    {
-                        // 没有暂存数据却在这里出现（正常不该发生）→ 退化为占位条目
-                        if (!record.HasData) record = RainbowProgress.MakePlaceholder();
-                    }
-                    else
-                    {
+                    if (!RainbowProgress.ConsumePending(out record) || !record.HasData)
                         record = RainbowProgress.MakePlaceholder();
-                    }
                     RainbowProgress.Append(record);
                 }
                 catch { }

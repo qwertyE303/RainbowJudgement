@@ -20,6 +20,9 @@ namespace RainbowJudgement
             ModPath = modEntry.Path;
             Logger.Init(); // 定位 Mod 目录并清空 <RJ Mod 目录>\Log.txt（每次启动游戏重记）
 
+            CustomJudge.EnsureDefaults(); // 首次运行：写入出厂四条自定义判定
+            CustomJudge.InvalidateLayout();
+
             _harmony = new Harmony(modEntry.Info.Id);
             _harmony.PatchAll(Assembly.GetExecutingAssembly());
 
@@ -30,14 +33,20 @@ namespace RainbowJudgement
 
             Enabled = true;
             RainbowProgress.Clear();
-            Logger.Guard("Main/Load", delegate { CounterDisplay.EnsureUI(); });
+            Logger.Guard("Main/Load", delegate { LiveDisplay.EnsureUI(); });
             Logger.Guard("Main/Load", delegate
             {
                 Logger.Log("[Main] UMM ModPath=" + ModPath + " | 资源基准目录=" + ModPaths.BaseDir
                     + " | 日志文件=" + Logger.FilePath
-                    + " | 开关 彩虹=" + Settings.EnableRainbow + " 平均判定=" + Settings.ShowAverageJudgment
-                    + " 时间=" + Settings.ShowAverageTime + " 颜色=" + Settings.ShowAverageColor
-                    + " 计数器=" + Settings.ShowRainbowCounter + " DebugLog=" + Settings.DebugLog);
+                    + " | 语言=" + Lang.Resolve()
+                    + " | 开关 彩虹=" + Settings.EnableRainbow + " 判定详情=" + Settings.ShowJudgeDetails
+                    + "（时间=" + Settings.ShowAverageTime + " 颜色=" + Settings.ShowAverageColor
+                    + " 角度=" + Settings.ShowAverageAngle + "）"
+                    + " | 实时 颜色=" + Settings.ShowLiveColor + " 时间=" + Settings.ShowLiveTime
+                    + " 角度=" + Settings.ShowLiveAngle
+                    + " | 自定义判定=" + Settings.EnableCustomJudge + " 档位数=" + CustomJudge.EnabledCount
+                    + " 显示计数=" + Settings.ShowCustomCount + " 结尾页计数=" + Settings.ShowCustomCountInResults
+                    + " | DebugLog=" + Settings.DebugLog);
             });
             return true;
         }
@@ -47,7 +56,7 @@ namespace RainbowJudgement
             Enabled = value;
             if (!value)
             {
-                Settings.ShowAverageJudgment = false;
+                Settings.ShowJudgeDetails = false;
                 Logger.Guard("Main/Toggle", delegate { MeterVisualPatch.RestoreAllMeters(); });
             }
             else
@@ -65,6 +74,7 @@ namespace RainbowJudgement
             {
                 Enabled = false;
                 MeterVisualPatch.RestoreAllMeters();
+                LiveDisplay.HideAll();
                 if (_harmony != null)
                 {
                     _harmony.UnpatchAll(modEntry.Info.Id);

@@ -18,7 +18,6 @@ namespace RainbowJudgement
         public const int TierBlueLate = 4;
         public const int TierGreenEarly = 5;
         public const int TierGreenLate = 6;
-        public const int TierCount = 7;
 
         /// <summary>提前·完美绿(2/3PP~PP)</summary>
         public static int GreenEarly;
@@ -40,7 +39,7 @@ namespace RainbowJudgement
 
         // ---------------- 派生量 ----------------
 
-        /// <summary>7 档计数之和（v1.0.2 起 = 全部有判定数据的判定数，即游戏 hitMargins.Count 减去故障类，不变量自检用）</summary>
+        /// <summary>7 档计数之和（= 完美窗口内的判定数，不变量自检用：应等于游戏的严格 Perfect + Auto）</summary>
         public static int TotalTiers()
         {
             return GreenEarly + BlueEarly + CyanEarly + Purple + CyanLate + BlueLate + GreenLate;
@@ -52,29 +51,11 @@ namespace RainbowJudgement
             return _perfectCount > 0 ? _sumPerfectRatio / _perfectCount : 0.0;
         }
 
-        /// <summary>X^n 的颜色档位：存在绿→3(540nm)、蓝→2(487nm)、青→1(460nm)，否则 0(433nm)</summary>
-        public static int GetXColorIndex()
-        {
-            if (GreenEarly != 0 || GreenLate != 0) return 3;
-            if (BlueEarly != 0 || BlueLate != 0) return 2;
-            if (CyanEarly != 0 || CyanLate != 0) return 1;
-            return 0;
-        }
-
-        /// <summary>按绝对角度误差分档（纯函数，不累加）：a1/a2/a3 = 1/3PP、0.5PP、2/3PP 边界角</summary>
-        public static int TierOf(double absDeg, bool isEarly, double a1, double a2, double a3)
-        {
-            if (absDeg <= a1) return TierPurple;
-            if (absDeg <= a2) return isEarly ? TierCyanEarly : TierCyanLate;
-            if (absDeg <= a3) return isEarly ? TierBlueEarly : TierBlueLate;
-            return isEarly ? TierGreenEarly : TierGreenLate;
-        }
-
         // ---------------- 累加 / 重置 ----------------
 
-        /// <summary>按档位号累加一次判定（实时追加与回档重放共用同一条路径）。
-        /// 自 v1.0.2 起**所有判定**都计入（含 PP 开外的 EP/LP/VE/VL/Too，它们按角度落到最高档"绿"），
-        /// 与平均判定颜色 / 平均绝对偏差 / X^n 的 r 三处口径完全一致。
+        /// <summary>按档位号累加一次判定（实时追加与全量重放共用同一条路径）。
+        /// 只统计**原版完美窗口内**（InPure）的判定：PP 开外的 EP/LP/VE/VL/Too 由 RainbowProgress 挡住，
+        /// 与平均判定颜色 / 偏差（全部判定）刻意分成两套口径。
         /// 占位条目（Tier&lt;0，尖刺/激光等无判定数据）不进任何统计。</summary>
         public static void AddTier(int tier, double p)
         {
@@ -108,42 +89,13 @@ namespace RainbowJudgement
             LastJudge.Clear();
         }
 
-        // ---------------- 计数器 / X^n 的 4 档颜色 ----------------
-
-        /// <summary>
-        /// 7 档计数器与 X^n 共用的 4 档颜色，按**彩虹映射**取色：
-        ///   0 档（紫，全在 1/3PP 内 / 计数器 A）      → 400nm
-        ///   1 档（青，到 0.5PP / 计数器 B C）         → 440nm
-        ///   2 档（蓝，到 2/3PP / 计数器 D E）         → 480nm
-        ///   3 档（完美绿，到 PP / 计数器 F G）        → **原版完美绿**（RDConstants 读游戏资源，刻意不走映射）
-        /// 这样计数器数字、X^n 的颜色与场景内 tick/文字随同一套映射变化。
-        /// </summary>
-        public static Color32 TierRgb(int index)
-        {
-            switch (index)
-            {
-                case 0: return Spectrum.WavelengthToRgb(400.0);
-                case 1: return Spectrum.WavelengthToRgb(440.0);
-                case 2: return Spectrum.WavelengthToRgb(480.0);
-                default: return GetPerfectGreenColor();
-            }
-        }
-
-        /// <summary>同上，输出 "RRGGBB"（供 TMP 富文本 &lt;color=#...&gt; 使用）</summary>
-        public static string TierHex(int index)
-        {
-            if (index >= 3) return PerfectGreenHex; // 原版完美绿
-            return Spectrum.ToHex(TierRgb(index));
-        }
-
-        // ---------------- 原版完美绿（计数器 F/G 与 X^n 第 3 档） ----------------
+        // ---------------- 原版完美绿（X^n 在没有可用自定义档位时的回退色） ----------------
 
         private static string _greenHex = "5FFF4E"; // 原版完美绿 fallback
         private static bool _greenLoaded;
 
         /// <summary>原版完美绿，运行时读 RDConstants.hitMarginColoursUI.colourPerfect。
-        /// **只用于计数器那两个数字（F/G）与 X^n 第 3 档的 "X"** —— 这一档保持原版观感、刻意不走彩虹映射；
-        /// 其余场景颜色（tick / 判定文字 / 平均判定色块）一律走 Spectrum 的波长映射。</summary>
+        /// 用途：X^n 的 "X" 在**没有任何可用自定义档位**时的回退色（有档位时跟随该档的自定义颜色）。</summary>
         public static Color32 GetPerfectGreenColor()
         {
             EnsureGreenHex();
@@ -170,12 +122,6 @@ namespace RainbowJudgement
                 _greenHex = string.Format("{0:X2}{1:X2}{2:X2}", (int)(pc.r * 255f), (int)(pc.g * 255f), (int)(pc.b * 255f));
             }
             catch { }
-        }
-
-        /// <summary>原版完美绿的 hex（计数器文本用），保证已尝试读取过</summary>
-        public static string PerfectGreenHex
-        {
-            get { EnsureGreenHex(); return _greenHex; }
         }
     }
 }
