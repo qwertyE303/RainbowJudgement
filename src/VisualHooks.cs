@@ -14,7 +14,7 @@ namespace RainbowJudgement
             [HarmonyPostfix]
             public static void Postfix(scrHitTextMesh __instance)
             {
-                if (!Main.Enabled || !Main.Settings.EnableRainbow) return;
+                if (!Main.Active) return;
                 try
                 {
                     if (__instance == null || __instance.text == null) return;
@@ -44,7 +44,7 @@ namespace RainbowJudgement
             {
                 try
                 {
-                    if (!Main.Enabled || !Main.Settings.EnableRainbow) return;
+                    if (!Main.Active) return;
                     if (__instance == null || __instance.txtCongrats == null) return;
 
                     string flawless = RDString.Get("status.allPurePerfect", null);

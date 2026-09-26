@@ -21,17 +21,25 @@ namespace RainbowJudgement
     public static class ProgressStore
     {
         private const string FileName = "rainbow_judgement.sav";
-        private const int FormatVersion = 2;
+        /// <summary>存档格式版本：1 = 只有前 7 列；2 = + 几何数据（delta…practiceScale）；
+        /// 3 = + 强制PP 标记；4 = + 判定瞬间的关卡难度</summary>
+        private const int FormatVersion = 4;
 
         /// <summary>每格判定的字段顺序（写进文件头，方便人工查看）。
-        /// 前 7 列与 v1 完全一致（老存档可直接读）；第 8 列起是 v2 追加的**几何数据**，
-        /// 有了它才能按当前档位定义对历史判定重算颜色与计数（见 HitRecord）。
+        /// 前 7 列与 v1 完全一致（老存档可直接读）；第 8~14 列是 v2 追加的**几何数据**，
+        /// 有了它才能按当前档位定义对历史判定重算颜色与计数（见 HitRecord）；
+        /// 第 15 列是 v3 追加的**强制PP 标记**（中旋 midspin 被游戏改成 Perfect 的判定）；
+        /// 第 16 列是 v4 追加的**关卡难度**——难度是全局运行时量、游戏不随存档恢复，
+        /// 而玩家可以在局内切换，所以必须逐条存下来，重放时才能按记录自己的难度选档位行。
+        /// 新增列一律**追加在末尾**，所以 v1~v3 老存档读进来只是缺列取默认值，不会错位
+        /// （难度缺列 → 严格，与玩家约定一致）。
         /// 注意：第 2 列 "isPerfect" 是历史列名，写的是「是否落在原版完美窗口内」(InPure)，
         /// 保持列序号不变，老存档仍可读。</summary>
         private static readonly string[] Fields =
         {
             "hasData", "isPerfect", "isAuto", "tier", "lambda", "timeMs", "p",
-            "deltaDeg", "posPerDeg", "aScale", "bScale", "ppDeg", "pureDeg", "practiceScale"
+            "deltaDeg", "posPerDeg", "aScale", "bScale", "ppDeg", "pureDeg", "practiceScale",
+            "forcePP", "difficulty"
         };
 
         // ---------------- 路径 ----------------
@@ -138,6 +146,8 @@ namespace RainbowJudgement
                 row.Add(r.PpDeg);
                 row.Add(r.PureDeg);
                 row.Add(r.PracticeScale);
+                row.Add(r.ForcePP ? 1 : 0);
+                row.Add(r.Difficulty);
                 rows.Add(row);
             }
 
@@ -227,7 +237,7 @@ namespace RainbowJudgement
                 Dictionary<string, object> root = GDMiniJSON.Json.Deserialize(File.ReadAllText(path, Encoding.UTF8)) as Dictionary<string, object>;
                 if (root == null) return null;
                 int version = ToInt(Get(root, "version"));
-                if (version != 1 && version != FormatVersion) return null;
+                if (version < 1 || version > FormatVersion) return null;
 
                 level = ToString(Get(root, "level"));
                 fingerprint = ToString(Get(root, "fingerprint"));
@@ -257,6 +267,10 @@ namespace RainbowJudgement
                     if (row.Count > 11) r.PpDeg = ToDouble(row[11]);
                     if (row.Count > 12) r.PureDeg = ToDouble(row[12]);
                     if (row.Count > 13) r.PracticeScale = ToDouble(row[13]);
+                    if (row.Count > 14) r.ForcePP = ToInt(row[14]) != 0;
+                    // v4：判定瞬间的难度；老存档（v1~v3）缺这一列 → 严格
+                    r.Difficulty = row.Count > 15 ? ToInt(row[15]) : TierDifficulty.Strict;
+                    if (r.Difficulty < 0 || r.Difficulty >= TierDifficulty.Count) r.Difficulty = TierDifficulty.Strict;
                     if (row.Count <= 7 && r.HasData) legacy++;
                     list.Add(r);
                 }

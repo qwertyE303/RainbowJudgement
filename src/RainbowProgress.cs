@@ -14,6 +14,13 @@ namespace RainbowJudgement
         public bool InPure;
         /// <summary>本次判定是否 auto 触发（官方 autoplay / 自动砖块）</summary>
         public bool IsAuto;
+        /// <summary>本次判定被游戏**强制记成 PP**（中旋 midspin 的无限判定窗 / 旧式 autoplay 的强制 Perfect）：
+        /// 游戏记账用的是 <c>scrPlanet.SwitchChosen</c> 里被改写过的档位（V_6 = HitMargin.Perfect），
+        /// 与 <c>scrMisc.GetHitMargin</c> 按角度算出来的那个档位不是一回事。
+        /// 游戏自己在 X-Accuracy 里给这种判定满分权重（1.0）、且 deadTiles 显式排除 midSpin 砖，
+        /// 所以本 Mod 也照游戏口径处理：补进自定义判定**最严那一档**、X^n 的 p 记 0、
+        /// 平均判定按**零误差**计入（见 RainbowProgress.CountRecord / CustomCounter.Count）。</summary>
+        public bool ForcePP;
         /// <summary>0~6（见 RainbowCounter.Tier*）；-1 = 无档位（占位条目，或完美窗口之外）</summary>
         public int Tier;
         /// <summary>波长 nm</summary>
@@ -42,9 +49,31 @@ namespace RainbowJudgement
         public double PureDeg;
         /// <summary>判定瞬间的练习速度（currentSpeedTrial），用于重算自定义档位的时间项</summary>
         public double PracticeScale;
+        /// <summary>判定瞬间的**关卡难度**（0=宽松 1=标准 2=严格，见 <see cref="TierDifficulty"/>）。
+        /// 必须逐条存下来：难度是全局运行时量、游戏不随存档恢复它，而玩家可以在局内切换
+        /// （严格打一段 → 宽松打一段 → 再切回严格）。重放历史时只能按**记录自己的**难度选行，
+        /// 否则会把宽松那一段按严格重算，计数就错了。老存档缺这一列 → 默认严格。
+        /// 缺省值 2（严格）= 枚举里"最严"那一档，正好当默认。</summary>
+        public int Difficulty;
 
         /// <summary>是否带几何数据（false = 老存档条目，只能按判定瞬间的快照统计）</summary>
         public bool HasGeometry { get { return PosPerDeg > 0.0001; } }
+
+        /// <summary>
+        /// 按**游戏真正记下的档位**校准强制 PP 标记（在 scrMarginTracker.AddHit 里调用）。
+        /// 这是这套机制的地面真值：AddHit 的 HitMargin 就是最终进 hitMargins、被结果页统计的那个值。
+        /// 只要它是 Perfect/Auto，而本记录的几何量却在完美窗口之外，就说明游戏把这次判定
+        /// 按完美记账（中旋无限判定窗 / 旧式自动砖等）→ 补上 ForcePP。
+        /// 只补不撤：已经判定为强制 PP 的保持原样。
+        /// </summary>
+        public void MergeGameGrade(HitMargin grade)
+        {
+            if (ForcePP || !HasGeometry) return;
+            if (grade != HitMargin.Perfect && grade != HitMargin.Auto) return;
+            if (Math.Abs(DeltaDeg) * PosPerDeg <= PpDeg * PosPerDeg) return; // 几何量本来就在窗口内 → 无需校准
+            // 只改判定性质：Tier / P 由 CountRecord 按记录自带的难度统一派生，避免两处口径打架
+            ForcePP = true;
+        }
     }
 
     /// <summary>
@@ -61,6 +90,8 @@ namespace RainbowJudgement
     /// 两套统计范围：
     ///   · **全部有判定数据的判定**（含 PP 边界外的 EP/LP/VE/VL/Too）→ 平均判定颜色、平均绝对时间/角度偏差
     ///   · **仅原版完美窗口内**（InPure）→ 7 档计数器（F A B C D E G）、X^n 的 r
+    ///   · 另外：**几何量在窗口外、但被游戏强制记成 PP 的判定**（中旋 midspin / autoplay，见 <see cref="HitRecord.ForcePP"/>）
+    ///     两者都不属于 —— 它们只补进**自定义判定**的最严一档，好让自定义计数之和与游戏结果页的 PP 总数对得上
     /// </summary>
     public static class RainbowProgress
     {
@@ -72,12 +103,17 @@ namespace RainbowJudgement
         private static bool _anchorLogged; // 每次关卡只打印一次锚点表（诊断用）
         private static int _counted;       // 参与统计的条数（有判定数据）
         private static int _countedInPure; // 其中落在原版完美窗口内的条数（7 档计数器 / X^n 的来源）
+        private static int _countedForcedPP; // 其中"几何量在窗口外、但被游戏强制记成 PP"的条数（中旋 / autoplay）
 
         public static int Count { get { return _hits.Count; } }
         /// <summary>参与统计的判定数（= RainbowState.Count 的来源）</summary>
         public static int Counted { get { return _counted; } }
         /// <summary>落在原版完美窗口内的判定数（= 7 档计数之和）</summary>
         public static int CountedInPure { get { return _countedInPure; } }
+        /// <summary>被游戏强制记成 PP、但几何量在完美窗口外的判定数（中旋 midspin 为主）。
+        /// 它们被补进自定义判定最严那一档，所以：
+        /// <c>CountedInPure + CountedForcedPP == 游戏 GetHits(Perfect) + GetHits(Auto)</c>。</summary>
+        public static int CountedForcedPP { get { return _countedForcedPP; } }
 
         // ---------------- 暂存（GetMarginHook 填 → AddHit 消费） ----------------
 
@@ -123,6 +159,13 @@ namespace RainbowJudgement
             CheckInvariant(false);
         }
 
+        /// <summary>取记录自带的难度；越界（老存档缺列 / 脏数据）→ 严格（老存档的约定默认值）</summary>
+        private static int RecordDifficulty(HitRecord r)
+        {
+            return (r.Difficulty >= 0 && r.Difficulty < TierDifficulty.Count)
+                ? r.Difficulty : TierDifficulty.Strict;
+        }
+
         /// <summary>
         /// 把一条有效判定计入派生统计（实时追加与全量重放共用同一条路径，保证口径一致）。
         /// 带几何数据的条目**按当前设置重算**（锚点色 / 7 档 / 自定义档位）；
@@ -134,6 +177,7 @@ namespace RainbowJudgement
 
             double lambda, timeMs, absDeg;
             bool inPure;
+            bool forcePP;
             int tier;
             double p;
 
@@ -149,14 +193,30 @@ namespace RainbowJudgement
                 timeMs = perMs > 0.0000001 ? absDeg / perMs : r.TimeMs;
 
                 inPure = absScaled <= frame.PpScaled;
+                forcePP = r.ForcePP;
                 tier = inPure
                     ? RainbowMath.TierOf(absScaled, r.DeltaDeg < 0.0,
                         RainbowMath.FixedTierScaled(0, frame),
                         RainbowMath.FixedTierScaled(1, frame),
                         RainbowMath.FixedTierScaled(2, frame))
                     : -1;
-                p = r.PpDeg > 0.0001 ? absDeg / r.PpDeg : 0.0;
-                CustomCounter.Count(absScaled, r.DeltaDeg < 0.0, frame);
+                // 强制 PP 的判定：游戏按 Perfect 记账 → X^n 的 p 记 0（与 auto/正中同口径，n 才不会被推成负数）
+                p = inPure && r.PpDeg > 0.0001 ? absDeg / r.PpDeg : 0.0;
+
+                if (forcePP && !inPure)
+                {
+                    // 【游戏口径】中旋 / 旧式 autoplay 被强制记成 Perfect 的判定：
+                    // 游戏在 X-Accuracy 里给它满分权重 1.0，所以平均判定与 X^n 也一律按**零误差**计入
+                    //（三角偏差 / 时间偏差 / 波长全部按 0 算），否则平均颜色会被拉到红端、偏差被夸大。
+                    // 判定文字与仪表盘 tick 仍按真实误差上色 —— 那是"这一下打得多飘"的即时反馈，不是统计口径。
+                    lambda = Spectrum.MinWavelengthNm; // 0 误差 → 380nm
+                    timeMs = 0.0;
+                    absDeg = 0.0;
+                }
+
+                // 自定义判定：普通判定按几何量分档；强制 PP 走"游戏口径"，补进最严那一档。
+                // 难度取**这条记录自己的**（不是当前 GCS.difficulty），否则局内切换难度后重放会算错。
+                CustomCounter.Count(absScaled, r.DeltaDeg < 0.0, frame, RecordDifficulty(r), forcePP);
             }
             else
             {
@@ -164,6 +224,7 @@ namespace RainbowJudgement
                 timeMs = r.TimeMs;
                 absDeg = 0.0;
                 inPure = r.InPure;
+                forcePP = false; // 老存档没有这一列 → 按旧口径（不补档）
                 tier = r.InPure ? r.Tier : -1;
                 p = r.P;
             }
@@ -173,6 +234,13 @@ namespace RainbowJudgement
             {
                 _countedInPure++;                            // 7 档计数器 / X^n 的 r：仅原版完美窗口内
                 RainbowCounter.AddTier(tier, p);
+            }
+            else if (forcePP)
+            {
+                // 几何量在窗口外、但游戏记成 PP：不进原版 7 档计数器（那 7 档是"角度真的在窗内"的计数），
+                // 但按游戏口径算一次完美中心参与 X^n 的 r；自定义判定那边已补进最严一档
+                _countedForcedPP++;
+                RainbowCounter.AddForcedPerfect();
             }
         }
 
@@ -184,6 +252,7 @@ namespace RainbowJudgement
             _anchorLogged = false;
             _counted = 0;
             _countedInPure = 0;
+            _countedForcedPP = 0;
             RainbowState.Reset();
             RainbowCounter.Reset();
             CustomCounter.ResetCounts();
@@ -198,6 +267,7 @@ namespace RainbowJudgement
             CustomCounter.ResetCounts();
             _counted = 0;
             _countedInPure = 0;
+            _countedForcedPP = 0;
             for (int i = 0; i < _hits.Count; i++)
             {
                 HitRecord r = _hits[i];
@@ -320,12 +390,17 @@ namespace RainbowJudgement
         /// <summary>不变量：
         ///   ① 账本长度 == 游戏 hitMargins.Count
         ///   ② 参与统计条数 == 游戏可判定条数（条数 − 故障类）
-        ///   ③ 7 档之和 == InPure 条数 == 游戏**严格 Perfect**(+Auto)
-        /// ③ 专门盯「有没有把完美窗口之外的判定算进新增档位里」。
+        ///   ③ 7 档之和 == InPure 条数
+        ///   ④ InPure 条数 + **强制 PP** 条数 == 游戏**严格 Perfect**(+Auto)
+        /// ③④ 专门盯「有没有把完美窗口之外的判定算进新增档位里」。
         /// 注意这里必须比 **Perfect**、不能比 Perfect+EarlyPerfect+LatePerfect：游戏的 EP/LP 是"命中时刻落在
         /// 完美时间窗内、但角度已超出 PP 边界"的近失判定（EP 可以是 42° 这种大角度），
-        /// 而我们要的"完美"就是角度口径 —— 实测两者严格对齐（例如某局 24 Perfect / 24 条窗口内，
-        /// 而 P+EP+LP=27），拿 EP/LP 去比会产生误报。</summary>
+        /// 而我们要的"完美"就是角度口径。
+        /// ④ 的 "+强制 PP" 是 v1.2.1 加的：中旋（midspin）砖上
+        /// <c>scrPlanet.SwitchChosen</c> 会把 midspinInfiniteMargin / 旧式自动砖的判定**直接改写成 HitMargin.Perfect**
+        /// 再记账，于是"游戏 Perfect 总数"里混进了几何量在窗口外的判定（实测一局 2850 判定里 3 条）。
+        /// 这种判定：计入自定义判定的最严一档与 X^n 的 r（p=0），并按零误差计入平均判定；
+        /// 但**不进**原版 7 档计数器（那 7 档是"角度真的在窗内"的计数，③ 依赖它）。</summary>
         private static void CheckInvariant(bool verbose)
         {
             try
@@ -335,15 +410,16 @@ namespace RainbowJudgement
                 int gamePerfect = GameState.PerfectCount;
                 int tiers = RainbowCounter.TotalTiers();
                 if (gameCount != _hits.Count || _counted != gameCountable
-                    || tiers != _countedInPure || _countedInPure != gamePerfect)
+                    || tiers != _countedInPure || _countedInPure + _countedForcedPP != gamePerfect)
                 {
                     string key = _hits.Count + "/" + gameCount + "/" + _counted + "/" + gameCountable
-                        + "/" + _countedInPure + "/" + gamePerfect + "/" + tiers;
+                        + "/" + _countedInPure + "/" + _countedForcedPP + "/" + gamePerfect + "/" + tiers;
                     if (key == _lastWarnKey) return; // 同一种不一致只报一次，避免刷屏
                     _lastWarnKey = key;
                     Logger.Warn("[RainbowProgress] 不变量不一致：条数 我们=" + _hits.Count + " 游戏=" + gameCount
                         + "；统计条数 我们=" + _counted + " 游戏(可判定)=" + gameCountable
-                        + "；完美窗口内 我们=" + _countedInPure + " 游戏(Perfect+Auto)=" + gamePerfect
+                        + "；完美窗口内 我们=" + _countedInPure + "+强制PP=" + _countedForcedPP
+                        + " 游戏(Perfect+Auto)=" + gamePerfect
                         + "；7档之和=" + tiers);
                 }
                 else
@@ -351,7 +427,8 @@ namespace RainbowJudgement
                     _lastWarnKey = null;
                     if (verbose)
                         Logger.Log("[RainbowProgress] 一致：条数=" + gameCount + " 统计=" + _counted
-                            + " 完美窗口内=" + _countedInPure + " 7档之和=" + tiers);
+                            + " 完美窗口内=" + _countedInPure + " 强制PP=" + _countedForcedPP
+                            + " 7档之和=" + tiers);
                 }
             }
             catch { }

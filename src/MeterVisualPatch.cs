@@ -21,7 +21,7 @@ namespace RainbowJudgement
             try
             {
                 if (__instance == null) return;
-                if (!Main.Enabled || !Main.Settings.EnableRainbow) return; // 保持/回到游戏原版
+                if (!Main.Active) return; // 保持/回到游戏原版
 
                 // MeterTexture 内部已缓存：找不到图时两次调用都返回 null，不会重复读盘
                 Sprite straight = MeterTexture.Straight();

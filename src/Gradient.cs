@@ -76,6 +76,7 @@ namespace RainbowJudgement
 
         private static double _cacheA, _cacheB, _cacheP, _cacheQ, _cacheT;
         private static int _cacheRev = -1;
+        private static int _cacheDiff = -1;
         private static bool _cacheValid;
 
         /// <summary>波长(nm) → 该位置的颜色</summary>
@@ -116,7 +117,10 @@ namespace RainbowJudgement
         private static void Ensure(GradientFrame frame)
         {
             int rev = CustomJudge.LayoutRevision;
-            if (_cacheValid && _cacheRev == rev
+            // 难度必须进缓存键：高倍速下三种难度的 AScale/BScale/PpScaled/PureScaled 可能**完全相同**
+            // （VE/VL 的时间项被 60° 角度项压住），只比那几个量的话换难度不会重建锚点表。
+            int diff = CustomJudge.CurrentDifficulty();
+            if (_cacheValid && _cacheRev == rev && _cacheDiff == diff
                 && _cacheA == frame.AScale && _cacheB == frame.BScale
                 && _cacheP == frame.PpScaled && _cacheQ == frame.PureScaled
                 && _cacheT == frame.PracticeScale)
@@ -128,6 +132,7 @@ namespace RainbowJudgement
             _cacheQ = frame.PureScaled;
             _cacheT = frame.PracticeScale;
             _cacheRev = rev;
+            _cacheDiff = diff;
             _cacheValid = true;
 
             _count = 0;
@@ -135,15 +140,17 @@ namespace RainbowJudgement
 
             if (CustomJudge.Enabled)
             {
+                int difficulty = CustomJudge.CurrentDifficulty();
                 int n = CustomJudge.EnabledCount;
                 for (int i = 0; i < n; i++)
                 {
                     CustomTierDef tier = CustomJudge.EnabledAt(i);
                     if (tier == null) continue;
-                    double pos = CustomJudge.BoundaryScaled(tier, frame);
+                    // 边界按**当前关卡难度**那一行算 → 自定义锚点也吃难度（严格/标准/宽松可以不同）
+                    double pos = CustomJudge.BoundaryScaled(tier, frame, difficulty);
                     // 60 刻度之外画不到（仪表盘满刻度 = Counted 边界），不参与取色
                     if (pos <= 0.0 || pos >= RainbowMath.CountedScaled) continue;
-                    Push(pos, WavelengthOfDeg(tier.Deg), 1);
+                    Push(pos, WavelengthOfDeg(CustomJudge.AnchorDeg(tier, difficulty)), 1);
                 }
             }
 

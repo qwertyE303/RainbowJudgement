@@ -140,9 +140,13 @@ namespace RainbowJudgement
             Add(t, "editCustom", "编辑自定义判定", "Edit Custom Judgements", "カスタム判定を編集", "사용자 지정 판정 편집");
             Add(t, "showCount", "显示判定计数", "Show Judgement Counts", "判定カウントを表示", "판정 카운트 표시");
             Add(t, "countInResults", "结尾页显示计数详情", "Show Count Details on Results", "リザルトにカウント詳細を表示", "결과 화면에 카운트 상세 표시");
-            Add(t, "colDeg", "判定角度", "Angle", "判定角度", "판정 각도");
-            Add(t, "colTime", "最小限制时间", "Min Time", "最小時間", "최소 시간");
-            Add(t, "colColor", "自定义颜色", "Custom Colour", "カスタム色", "사용자 지정 색");
+            Add(t, "colDeg", "角度（°）", "Angle (°)", "角度（°）", "각도(°)");
+            Add(t, "colJudgeTime", "时间（ms）", "Time (ms)", "時間（ms）", "시간(ms)");
+            Add(t, "colTime", "最小时间（ms）", "Min (ms)", "最小時間（ms）", "최소(ms)");
+            Add(t, "colColor", "颜色", "Colour", "色", "색");
+            Add(t, "diffStrict", "严格", "Strict", "厳格", "엄격");
+            Add(t, "diffNormal", "标准", "Normal", "標準", "표준");
+            Add(t, "diffLenient", "宽松", "Lenient", "寛容", "관대");
             Add(t, "wavelength", "波长（nm）", "Wavelength (nm)", "波長（nm）", "파장(nm)");
             Add(t, "rgb", "RGB", "RGB", "RGB", "RGB");
             Add(t, "invalid", "无效", "Invalid", "無効", "잘못된 값");

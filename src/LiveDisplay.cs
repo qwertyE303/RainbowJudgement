@@ -45,7 +45,7 @@ namespace RainbowJudgement
         public static void Refresh()
         {
             RainbowSettings settings = Main.Settings;
-            if (!Main.Enabled || settings == null || !settings.EnableRainbow)
+            if (!Main.Active || settings == null)
             {
                 HideAll();
                 return;
@@ -100,21 +100,14 @@ namespace RainbowJudgement
             SaveCounts(spacing);
 
             int count = JudgeDetails.BuildCustomSequence();
-            if (count <= 0)
+            if (count > 0)
             {
-                OverlayText.SetText(_count, "", ref _countCache);
+                StringBuilder sb = new StringBuilder(64);
+                JudgeDetails.AppendColorizedCounts(sb, new string(' ', spacing));
+                OverlayText.SetText(_count, sb.ToString(), ref _countCache);
                 return;
             }
-
-            string gap = new string(' ', spacing);
-            StringBuilder sb = new StringBuilder(64);
-            for (int i = 0; i < count; i++)
-            {
-                if (i > 0) sb.Append(gap);
-                string hex = CustomJudge.DigitHex(CustomJudge.EnabledAt(JudgeDetails.SequenceIndex(i)));
-                sb.Append("<color=#").Append(hex).Append(">").Append(JudgeDetails.SequenceValue(i)).Append("</color>");
-            }
-            OverlayText.SetText(_count, sb.ToString(), ref _countCache);
+            OverlayText.SetText(_count, "", ref _countCache);
         }
 
         private static bool SameCounts(int spacing)

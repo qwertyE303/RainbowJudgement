@@ -102,14 +102,25 @@ namespace RainbowJudgement
 
             StringBuilder sb = new StringBuilder(64);
             sb.Append(label).Append("：[");
+            AppendColorizedCounts(sb, "/");
+            sb.Append("]");
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// 把"按档位着色的计数序列"追加到 <paramref name="sb"/>（结尾页与关卡内实时显示共用）。
+        /// 序列顺序由 <see cref="BuildCustomSequence"/> 决定（左右对称），这里只负责上色与分隔符。
+        /// 必须是富文本（TMP / UGUI 都吃 &lt;color&gt;）。
+        /// </summary>
+        public static void AppendColorizedCounts(StringBuilder sb, string separator)
+        {
+            int count = BuildCustomSequence();
             for (int i = 0; i < count; i++)
             {
-                if (i > 0) sb.Append("/");
+                if (i > 0) sb.Append(separator);
                 string hex = CustomJudge.DigitHex(CustomJudge.EnabledAt(SequenceIndex(i)));
                 sb.Append("<color=#").Append(hex).Append(">").Append(SequenceValue(i)).Append("</color>");
             }
-            sb.Append("]");
-            return sb.ToString();
         }
 
         // ---------------- 显示顺序（结果页与关卡内实时共用，无分配） ----------------

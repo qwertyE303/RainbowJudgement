@@ -74,6 +74,19 @@ namespace RainbowJudgement
             _perfectCount++;
         }
 
+        /// <summary>
+        /// 强制 PP（中旋 midspin / 旧式 autoplay，游戏改写档位后记成 Perfect）对 X^n 的贡献：
+        /// **不进任何档位桶**（那 7 档是"角度真的落在完美窗口内"的计数，不变量自检依赖它），
+        /// 但按游戏口径**算一次完美中心**参与 r 的平均 —— 即 p 记 0（与 auto/正中同口径）。
+        /// 游戏自己也是这么算的：X-Accuracy 里 HitMargin.Perfect 拿满分权重 1.0，
+        /// <c>deadTiles</c> 还把 midSpin 砖显式排除，所以中旋在游戏账本里就是零瑕疵。
+        /// </summary>
+        public static void AddForcedPerfect()
+        {
+            _sumPerfectRatio += 0.0;
+            _perfectCount++;
+        }
+
         /// <summary>只清计数与 p 统计（重放前调用）</summary>
         public static void ResetCounts()
         {

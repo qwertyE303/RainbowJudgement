@@ -12,6 +12,21 @@ namespace RainbowJudgement
         public static string ModPath;
         public static bool Enabled { get; private set; }
 
+        /// <summary>
+        /// 所有补丁的统一总闸门：Mod 已加载 **且** 玩家开着「开启彩虹判定」。
+        /// 收敛原先散落在各 hook 里的 `!Main.Enabled || !Main.Settings.EnableRainbow`
+        /// （写成属性顺带把 Settings 的空引用也兜住了）。语义与逐处判断完全一致。
+        /// </summary>
+        public static bool Active
+        {
+            get
+            {
+                if (!Enabled) return false;
+                RainbowSettings settings = Settings;
+                return settings != null && settings.EnableRainbow;
+            }
+        }
+
         private static Harmony _harmony;
 
         public static bool Load(UnityModManager.ModEntry modEntry)

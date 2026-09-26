@@ -32,7 +32,7 @@ namespace RainbowJudgement
             [HarmonyPostfix]
             public static void Postfix()
             {
-                if (!Main.Enabled || !Main.Settings.EnableRainbow) return;
+                if (!Main.Active) return;
                 Logger.Guard("RainbowProgress/Revert", delegate { RainbowProgress.OnGameRevert(); });
             }
         }
@@ -44,7 +44,7 @@ namespace RainbowJudgement
             [HarmonyPostfix]
             public static void Postfix()
             {
-                if (!Main.Enabled || !Main.Settings.EnableRainbow) return;
+                if (!Main.Active) return;
                 Logger.Guard("RainbowProgress/Reset", delegate { RainbowProgress.OnGameReset(); });
             }
         }
@@ -58,7 +58,7 @@ namespace RainbowJudgement
             [HarmonyPostfix]
             public static void Postfix()
             {
-                if (!Main.Enabled || !Main.Settings.EnableRainbow) return;
+                if (!Main.Active) return;
                 Logger.Guard("RainbowProgress/Save", delegate { ProgressStore.Save(); });
             }
         }
@@ -70,7 +70,7 @@ namespace RainbowJudgement
             [HarmonyPostfix]
             public static void Postfix()
             {
-                if (!Main.Enabled || !Main.Settings.EnableRainbow) return;
+                if (!Main.Active) return;
                 Logger.Guard("RainbowProgress/Load", delegate { ProgressStore.LoadAndAlign(); });
             }
         }

@@ -25,10 +25,10 @@ namespace RainbowJudgement
             try
             {
                 if (__instance == null || __instance.textComponent == null) return;
+                if (!Main.Active) return;
 
-                bool active = Main.Enabled && Main.Settings != null && Main.Settings.EnableRainbow;
                 RainbowSettings settings = Main.Settings;
-                if (!active) return;
+                if (settings == null) return;
 
                 bool showAverage = settings.ShowJudgeDetails
                     && (settings.ShowAverageColor || settings.ShowAverageTime || settings.ShowAverageAngle);
@@ -50,10 +50,16 @@ namespace RainbowJudgement
                         + " 平均波长=" + RainbowState.AverageWavelength.ToString("F1") + "nm"
                         + " 平均时间=" + RainbowState.AverageAbsTimeMs.ToString("F2") + "ms"
                         + " 平均角度=" + RainbowState.AverageAbsDeg.ToString("F2") + "°"
+                        + " 完美窗口内=" + RainbowProgress.CountedInPure
+                        + " 强制PP=" + RainbowProgress.CountedForcedPP
+                        + " 游戏(Perfect+Auto)=" + GameState.PerfectCount
                         + " 显示=[平均" + (showAverage ? "T" : "-")
                         + (settings.ShowAverageTime ? "t" : "-")
                         + (settings.ShowAverageAngle ? "a" : "-")
                         + (settings.ShowAverageColor ? "c" : "-") + " 计数" + (showCount ? "T" : "F") + "]");
+
+                    // 对账用：游戏自己的 hitMargins 分布（我们的 in-window / 强制PP 应当能和它对上）
+                    Logger.Log("[RainbowJudgement] 游戏 hitMargins: " + JudgeHooks.GetMarginHook.HitMarginsHistogram());
                 }
             }
             catch (Exception ex)

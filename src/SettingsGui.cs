@@ -20,9 +20,8 @@ namespace RainbowJudgement
     {
         private static readonly Dictionary<string, IntField> IntFields = new Dictionary<string, IntField>();
         private static readonly Dictionary<string, StringField> StringFields = new Dictionary<string, StringField>();
-        private static readonly List<RowEditor> RowBuffers = new List<RowEditor>();
 
-        private static bool _editorExpanded; // 折叠状态只是 UI 状态，不落盘
+        internal static bool _editorExpanded; // 折叠状态只是 UI 状态，不落盘
         private static Texture2D _white;
 
         public static void Draw(UnityModManager.ModEntry modEntry)
@@ -108,7 +107,7 @@ namespace RainbowJudgement
             GUI.enabled = true;
 
             // 编辑自定义判定（无开关，始终可编辑；下拉展开）
-            layoutDirty |= DrawCustomEditor(settings);
+            layoutDirty |= CustomTierEditor.DrawCustomEditor(settings);
 
             // 显示判定计数
             GUI.enabled = enabled && settings.EnableCustomJudge;
@@ -258,189 +257,62 @@ namespace RainbowJudgement
 
         // ---------------- 编辑自定义判定 ----------------
 
-        private static bool DrawCustomEditor(RainbowSettings settings)
-        {
-            bool dirty = false;
 
-            GUILayout.BeginHorizontal(new GUILayoutOption[0]);
-            GUILayout.Space(40f);
-            string caption = (_editorExpanded ? "\u25BC " : "\u25B6 ") + Lang.T("editCustom");
-            bool expanded = GUILayout.Toggle(_editorExpanded, caption, GUI.skin.button, GUILayout.Width(260f));
-            GUILayout.EndHorizontal();
-            if (expanded != _editorExpanded) _editorExpanded = expanded;
-            if (!_editorExpanded) return false;
 
-            List<CustomTierDef> tiers = settings.CustomTiers;
-            if (tiers == null)
-            {
-                tiers = new List<CustomTierDef>();
-                settings.CustomTiers = tiers;
-            }
 
-            // New / Sort / Reset
-            GUILayout.BeginHorizontal(new GUILayoutOption[0]);
-            GUILayout.Space(60f);
-            if (GUILayout.Button("New", GUILayout.Width(70f)))
-            {
-                CustomJudge.AddTier();
-                tiers = settings.CustomTiers;
-                dirty = true;
-            }
-            if (GUILayout.Button("Sort", GUILayout.Width(70f)))
-            {
-                CustomJudge.SortTiers();
-                dirty = true;
-            }
-            if (GUILayout.Button("Reset", GUILayout.Width(70f)))
-            {
-                CustomJudge.ResetTiers();
-                tiers = settings.CustomTiers;
-                dirty = true;
-            }
-            GUILayout.FlexibleSpace();
-            GUILayout.EndHorizontal();
-
-            // 表头（与下面每行的三列严格对齐；#序号 / 启用 / Del 没有标题）
-            GUILayout.BeginHorizontal(new GUILayoutOption[0]);
-            GUILayout.Space(60f + ColumnIndex + ColumnEnable);
-            GUILayout.Label(Lang.T("colDeg"), GUILayout.Width(ColumnDeg));
-            GUILayout.Label(Lang.T("colTime"), GUILayout.Width(ColumnTime));
-            GUILayout.Label(Lang.T("colColor"), GUILayout.Width(ColumnColor));
-            GUILayout.EndHorizontal();
-
-            if (tiers.Count == 0)
-            {
-                GUILayout.BeginHorizontal(new GUILayoutOption[0]);
-                GUILayout.Space(60f);
-                GUILayout.Label(Lang.T("noTiers"), new GUILayoutOption[0]);
-                GUILayout.EndHorizontal();
-                return dirty;
-            }
-
-            int removeAt = -1;
-            for (int i = 0; i < tiers.Count; i++)
-            {
-                CustomTierDef tier = tiers[i];
-                if (tier == null)
-                {
-                    tier = new CustomTierDef();
-                    tiers[i] = tier;
-                }
-                RowEditor row = RowBuffer(i, tier);
-
-                GUILayout.BeginHorizontal(new GUILayoutOption[0]);
-                GUILayout.Space(60f);
-                GUILayout.Label("#" + (i + 1), GUILayout.Width(ColumnIndex));
-
-                bool wasEnabled = tier.Enabled;
-                tier.Enabled = GUILayout.Toggle(tier.Enabled, "", GUILayout.Width(ColumnEnable));
-                if (tier.Enabled != wasEnabled) dirty = true;
-
-                dirty |= DoubleCell("deg" + i, ref row.Deg, ref tier.Deg, ColumnDeg);
-                dirty |= DoubleCell("time" + i, ref row.Time, ref tier.MinTimeMs, ColumnTime);
-
-                bool wasCustom = tier.UseCustomColor;
-                tier.UseCustomColor = GUILayout.Toggle(tier.UseCustomColor, "", GUILayout.Width(24f));
-                if (tier.UseCustomColor != wasCustom) dirty = true;
-                Swatch(CustomJudge.DigitColor(tier));
-                GUILayout.Space(ColumnColor - 24f - 24f);
-
-                if (GUILayout.Button("Del", GUILayout.Width(ColumnDel))) removeAt = i;
-                GUILayout.FlexibleSpace();
-                GUILayout.EndHorizontal();
-
-                if (tier.UseCustomColor) dirty |= DrawColorSubLevel(i, tier, row);
-            }
-
-            if (removeAt >= 0)
-            {
-                CustomJudge.RemoveAt(removeAt);
-                dirty = true;
-            }
-            return dirty;
-        }
-
-        /// <summary>自定义颜色的下一级：波长 / RGB 二选一（互斥），RGB 必须自带 '#'</summary>
-        private static bool DrawColorSubLevel(int index, CustomTierDef tier, RowEditor row)
-        {
-            bool dirty = false;
-            float indent = 60f + ColumnIndex + ColumnEnable + 12f;
-
-            // 波长
-            GUILayout.BeginHorizontal(new GUILayoutOption[0]);
-            GUILayout.Space(indent);
-            GUILayout.Label(Lang.T("wavelength") + "：", GUILayout.Width(110f));
-            bool waveSelected = !tier.RgbMode;
-            bool waveNow = GUILayout.Toggle(waveSelected, "", GUILayout.Width(20f));
-            if (waveNow != waveSelected && waveNow) { tier.RgbMode = false; dirty = true; }
-            bool previous = GUI.enabled;
-            GUI.enabled = previous && !tier.RgbMode;
-            dirty |= DoubleCell("wl" + index, ref row.Wl, ref tier.WavelengthNm, 80f);
-            GUI.enabled = previous;
-            GUILayout.FlexibleSpace();
-            GUILayout.EndHorizontal();
-
-            // RGB
-            GUILayout.BeginHorizontal(new GUILayoutOption[0]);
-            GUILayout.Space(indent);
-            GUILayout.Label(Lang.T("rgb") + "：", GUILayout.Width(110f));
-            bool rgbSelected = tier.RgbMode;
-            bool rgbNow = GUILayout.Toggle(rgbSelected, "", GUILayout.Width(20f));
-            if (rgbNow != rgbSelected && rgbNow) { tier.RgbMode = true; dirty = true; }
-            previous = GUI.enabled;
-            GUI.enabled = previous && tier.RgbMode;
-            dirty |= HexCell("rgb" + index, ref row.Rgb, ref tier.RgbHex, 100f);
-            GUI.enabled = previous;
-
-            if (tier.RgbMode && !CustomJudge.IsValidHex(tier.RgbHex))
-            {
-                GUIStyle warn = new GUIStyle(GUI.skin.label);
-                warn.normal.textColor = new Color(1f, 0.35f, 0.35f);
-                GUILayout.Label(Lang.T("invalid"), warn, GUILayout.Width(60f));
-            }
-            GUILayout.FlexibleSpace();
-            GUILayout.EndHorizontal();
-            return dirty;
-        }
-
-        // ---------------- 列宽（表头与数据行共用，保证对齐） ----------------
-
-        private const float ColumnIndex = 34f;
-        private const float ColumnEnable = 26f;
-        private const float ColumnDeg = 76f;
-        private const float ColumnTime = 100f;
-        private const float ColumnColor = 112f;
-        private const float ColumnDel = 46f;
 
         // ---------------- 行内输入控件 ----------------
 
-        private sealed class RowEditor
+        /// <summary>展开状态（只存下标；UI 状态不落盘）</summary>
+        internal static readonly List<int> _expandedTiers = new List<int>();
+
+        /// <summary>每档的输入缓冲：3 个难度 × 3 个字段 + 波长 + RGB</summary>
+        internal sealed class RowEditor
         {
             public CustomTierDef Owner;
-            public string Deg = "";
-            public string Time = "";
+            /// <summary>焦点内的输入缓冲（未聚焦时为空串 → 回显真实值）</summary>
+            public readonly string[,] Cells = new string[TierDifficulty.Count, 3];
             public string Wl = "";
             public string Rgb = "";
+
+            /// <summary>一个数值输入框：未聚焦空串，聚焦时是用户正在敲的内容</summary>
+            public string Get(int difficulty, int field)
+            {
+                string value = Cells[difficulty, field];
+                return value == null ? "" : value;
+            }
+
+            public void Set(int difficulty, int field, string value)
+            {
+                Cells[difficulty, field] = value;
+            }
+
+            public void Clear()
+            {
+                for (int d = 0; d < TierDifficulty.Count; d++)
+                    for (int f = 0; f < 3; f++) Cells[d, f] = "";
+                Wl = "";
+                Rgb = "";
+            }
         }
 
-        private static RowEditor RowBuffer(int index, CustomTierDef owner)
+        private static readonly List<RowEditor> RowBuffers = new List<RowEditor>();
+
+        internal static RowEditor RowBuffer(int index, CustomTierDef owner)
         {
             while (RowBuffers.Count <= index) RowBuffers.Add(new RowEditor());
             RowEditor row = RowBuffers[index];
             if (!ReferenceEquals(row.Owner, owner))
             {
                 row.Owner = owner;
-                row.Deg = "";
-                row.Time = "";
-                row.Wl = "";
-                row.Rgb = "";
+                row.Clear();
             }
             return row;
         }
 
         /// <summary>行内数值输入：焦点内解析（**空串按 0 算**），无焦点时回显当前数值。
         /// 值为 NaN 时显示空框（只有波长栏会用到：该档不对应任何波长）。</summary>
-        private static bool DoubleCell(string controlName, ref string buffer, ref double value, float width)
+        internal static bool DoubleCell(string controlName, ref string buffer, ref double value, float width)
         {
             if (buffer.Length == 0) buffer = ShowDouble(value);
             GUI.SetNextControlName(controlName);
@@ -456,14 +328,14 @@ namespace RainbowJudgement
             return false;
         }
 
-        private static string ShowDouble(double value)
+        internal static string ShowDouble(double value)
         {
             if (double.IsNaN(value)) return "";
             return FormatDouble(value);
         }
 
         /// <summary>行内 RGB 输入（原样保留玩家输入，是否合法由 CustomJudge.IsValidHex 判断）</summary>
-        private static bool HexCell(string controlName, ref string buffer, ref string value, float width)
+        internal static bool HexCell(string controlName, ref string buffer, ref string value, float width)
         {
             if (buffer.Length == 0) buffer = value ?? "";
             GUI.SetNextControlName(controlName);
@@ -483,7 +355,7 @@ namespace RainbowJudgement
             return value.ToString("0.###", CultureInfo.InvariantCulture);
         }
 
-        private static double ParseDouble(string text)
+        internal static double ParseDouble(string text)
         {
             if (string.IsNullOrEmpty(text)) return 0.0;
             double parsed;
@@ -492,7 +364,7 @@ namespace RainbowJudgement
         }
 
         /// <summary>色块（自定义颜色预览）</summary>
-        private static void Swatch(Color color)
+        internal static void Swatch(Color color)
         {
             Rect rect = GUILayoutUtility.GetRect(22f, 18f);
             Color previous = GUI.color;
