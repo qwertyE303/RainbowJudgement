@@ -142,7 +142,9 @@ namespace RainbowJudgement
 
                 if (fallbackFont != null)
                 {
-                    TMP_FontAsset created = TMP_FontAsset.CreateFontAsset(fallbackFont.name, "Normal", 90);
+                    // **2.9.8 差异**：这一版自带的 TextMeshPro 只有 CreateFontAsset(Font) 单参重载
+                    // （3.3.0 多了 CreateFontAsset(string, string, int) 那种按名创建的重载）。
+                    TMP_FontAsset created = TMP_FontAsset.CreateFontAsset(fallbackFont);
                     if (created != null) return created;
                 }
             }

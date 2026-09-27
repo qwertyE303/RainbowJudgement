@@ -63,8 +63,11 @@ namespace RainbowJudgement
             }
         }
 
-        /// <summary>续关读档：游戏恢复 hitMargins 后，把自有数据按前缀对齐恢复</summary>
-        [HarmonyPatch(typeof(scrMistakesManager), "LoadCheckpointProgress")]
+        /// <summary>续关读档：游戏恢复 hitMargins 后，把自有数据按前缀对齐恢复。
+        /// **2.9.8 与 3.3.0 的差异**：这一版叫 <c>scrMistakesManager.LoadProgress(bool saveProgressConditions)</c>
+        /// 且是静态方法（3.3.0 改名为实例方法 LoadCheckpointProgress()）。两版都是"游戏自己把 hitMargins 读回来"
+        /// 的那一层，所以挂在这里的语义完全一致。</summary>
+        [HarmonyPatch(typeof(scrMistakesManager), "LoadProgress")]
         public static class CheckpointLoadPatch
         {
             [HarmonyPostfix]

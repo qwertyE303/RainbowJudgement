@@ -17,17 +17,92 @@ namespace RainbowJudgement
                 if (!Main.Active) return;
                 try
                 {
-                    if (__instance == null || __instance.text == null) return;
+                    if (__instance == null) return;
+                    UnityEngine.Component textComponent = TextComponent(__instance);
+                    if (textComponent == null) return;
                     // 与 tick 同一个位移刻度 + 同一套锚点表 → 判定文字颜色与 tick 永远一致
                     double wavelength = AnchorSet.WavelengthAt(LastJudge.ScaledPos, LastJudge.Frame);
                     Color rainbow = Spectrum.WavelengthToRgb(wavelength);
-                    rainbow.a = __instance.text.color.a; // 保留原 alpha（淡出动画控制）
-                    __instance.text.color = rainbow;
+                    rainbow.a = TextAlpha(textComponent); // 保留原 alpha（淡出动画控制）
+                    SetTextColor(textComponent, rainbow);
                 }
                 catch (Exception ex)
                 {
                     Logger.Log("[HitTextColor] " + ex.Message);
                 }
+            }
+
+            // **2.9.8 差异**：这一版的 scrHitTextMesh.text 是 **private** 字段（3.3.0 才是 public），
+            // 所以直接写 __instance.text 编译不过；颜色属性则因 Unity 版本而异（TextMesh 的 color 可见性/实现不同）。
+            // 于是统一用"反射找成员"的方式访问：属性优先，其次字段（含非 public），最后退回组件自带的 TextMesh。
+
+            private static System.Reflection.MemberInfo _textMember;
+            private static bool _textSearched;
+
+            private static UnityEngine.Component TextComponent(scrHitTextMesh instance)
+            {
+                try
+                {
+                    if (!_textSearched)
+                    {
+                        _textSearched = true;
+                        const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Public
+                            | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+                        System.Reflection.PropertyInfo prop = typeof(scrHitTextMesh).GetProperty("text", flags);
+                        if (prop != null) _textMember = prop;
+                        else _textMember = typeof(scrHitTextMesh).GetField("text", flags);
+                    }
+
+                    if (_textMember is System.Reflection.PropertyInfo)
+                        return ((System.Reflection.PropertyInfo)_textMember).GetValue(instance, null) as UnityEngine.Component;
+                    if (_textMember is System.Reflection.FieldInfo)
+                        return ((System.Reflection.FieldInfo)_textMember).GetValue(instance) as UnityEngine.Component;
+
+                    return instance.GetComponent<TextMesh>();
+                }
+                catch { return null; }
+            }
+
+            private static System.Reflection.PropertyInfo _colorProp;
+            private static bool _colorPropSearched;
+
+            private static System.Reflection.PropertyInfo ColorProperty(UnityEngine.Component component)
+            {
+                if (_colorPropSearched) return _colorProp;
+                _colorPropSearched = true;
+                try
+                {
+                    if (component != null)
+                        _colorProp = component.GetType().GetProperty("color",
+                            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+                }
+                catch { _colorProp = null; }
+                return _colorProp;
+            }
+
+            /// <summary>取判定文字当前的 alpha（拿不到返回 1，即不改变透明度）</summary>
+            private static float TextAlpha(UnityEngine.Component text)
+            {
+                try
+                {
+                    System.Reflection.PropertyInfo prop = ColorProperty(text);
+                    if (prop == null) return 1f;
+                    object value = prop.GetValue(text, null);
+                    return value is Color ? ((Color)value).a : 1f;
+                }
+                catch { return 1f; }
+            }
+
+            /// <summary>把判定文字染成彩虹色</summary>
+            private static void SetTextColor(UnityEngine.Component text, Color color)
+            {
+                try
+                {
+                    System.Reflection.PropertyInfo prop = ColorProperty(text);
+                    if (prop == null) return;
+                    prop.SetValue(text, color, null);
+                }
+                catch { }
             }
         }
 

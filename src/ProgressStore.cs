@@ -339,17 +339,15 @@ namespace RainbowJudgement
         /// <summary>游戏判定列表的指纹（内容 + 存档点长度）</summary>
         private static string Fingerprint()
         {
-            scrMarginTracker tracker = GameState.PlayerTracker;
-            if (tracker == null) return "0";
             unchecked
             {
                 ulong hash = 1469598103934665603UL; // FNV-1a 64
-                List<HitMargin> margins = tracker.hitMargins;
+                List<HitMargin> margins = GameState.HitMargins;
                 if (margins != null)
                 {
                     for (int i = 0; i < margins.Count; i++) { hash ^= (ulong)(int)margins[i]; hash *= 1099511628211UL; }
                 }
-                hash ^= (ulong)(uint)tracker.lastHitMarginsSize;
+                hash ^= (ulong)(uint)GameState.LastHitMarginsSize;
                 hash *= 1099511628211UL;
                 return hash.ToString("X16", CultureInfo.InvariantCulture);
             }

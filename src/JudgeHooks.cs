@@ -6,34 +6,52 @@ using UnityEngine;
 namespace RainbowJudgement
 {
     /// <summary>
-    /// 判定采集 hooks。
-    /// 数据流：GetHitMargin 算出本次判定的几何基准（60 刻度）并暂存 → scrMarginTracker.AddHit 消费并追加到账本。
-    /// 账本与游戏的 hitMargins 严格同长同序，且"实时累加"与"回档重放"共用同一份数据。
-    /// 颜色一律走 <see cref="AnchorSet"/>（锚点表由自定义档位 + 原版三档边界动态生成）。
+    /// 判定采集 hooks（**2.9.8 版**），功能与 3.3.0 那棵树完全一致。
+    ///
+    /// 与 3.3.0 的对应关系：
+    ///   · 账本追加点：<c>scrMistakesManager.AddHit</c>（2.9.8）← <c>scrMarginTracker.AddHit</c>（3.3.0）
+    ///   · 判定格：<c>chosenPlanet.currfloor</c>（Compat.CurrentFloor）← 3.3.0 的参数里直接带 scrFloor
+    ///   · 中旋强制 PP：<c>scrController.midspinInfiniteMargin</c>（2.9.8 里该字段在 controller 上）
+    ///
+    /// **这一版踩过的两个大坑（务必不要回退）**：
+    ///   ① <c>scrController.HitAutoFloors</c> 是**每帧**都被 <c>Simulated_PlayerControl_Update</c> 调用的
+    ///      例行方法（它只是"检查这一格是不是自动砖"），**不能**当作"发生了 auto 命中"的信号：
+    ///      挂它会每帧置位 → 所有判定都被当成 auto → 误差被清零 → 全是 0ms 紫色。
+    ///      现在 auto 的判定权完全交给游戏自己的记账真值（见下面 AddHit 的 MergeGameGrade 校准）。
+    ///   ② <c>scrPlanet.SwitchChosen</c> 内部会调用 <c>scrMisc.GetHitMargin</c> **两次**（一次按刻度、
+    ///      一次在中旋标志置位后），因此"暂存 → 消费"必须按**判定序号**配对，不能只看"同帧新鲜"。
     /// </summary>
     public static class JudgeHooks
     {
-        /// <summary>tick 颜色改为彩虹渐变（与原版档位色无关）</summary>
+        /// <summary>tick 颜色改为彩虹渐变（与原版档位色无关）。
+        /// 2.9.8 的 CalculateTickColor 只有 (angle, marginScale) 两个参数，没有 hitFloor：
+        /// angle 用的就是判定时算出来、同一份传给 AddHit 的**刻度**（与我们的 ScaledPos 同一坐标系），
+        /// 缺的 marginScale/speed 从"当前判定格"补（3.3.0 是游戏直接当参数给的）。</summary>
         [HarmonyPatch(typeof(scrHitErrorMeter), "CalculateTickColor")]
         [HarmonyPriority(Priority.High)]
         public static class TickColorHook
         {
             [HarmonyPrefix]
-            public static bool Prefix(ref Color __result, float angle, float marginScale, scrFloor hitFloor)
+            public static bool Prefix(ref Color __result, float angle, float marginScale)
             {
                 try
                 {
                     if (!Main.Active) return true;
 
-                    double bpmTimesSpeed = RainbowMath.GameBpmTimesSpeedOf(hitFloor);
+                    Compat.CaptureCurrentFloor();
+                    scrFloor floor = Compat.CurrentFloor;
+
+                    double bpmTimesSpeed = RainbowMath.GameBpmTimesSpeedOf(floor);
                     double pitch = RainbowMath.GetPitchNow();
-                    double countedDeg = RainbowMath.CountedBoundaryDeg(bpmTimesSpeed, pitch, marginScale);
-                    GradientFrame frame = GradientFrame.FromRuntime(countedDeg, marginScale, bpmTimesSpeed, pitch);
+                    double scale = RainbowMath.MarginScaleOf(floor, marginScale);
+                    double countedDeg = RainbowMath.CountedBoundaryDeg(bpmTimesSpeed, pitch, scale);
+                    GradientFrame frame = GradientFrame.FromRuntime(countedDeg, scale, bpmTimesSpeed, pitch);
 
                     double wavelength = AnchorSet.WavelengthAt(angle, frame);
                     __result = Spectrum.WavelengthToRgb(wavelength);
 
                     Logger.Log("[TickColor] angle=" + angle.ToString("F2") + " countedDeg=" + countedDeg.ToString("F1")
+                        + " marginScale=" + scale.ToString("F4")
                         + " wl=" + wavelength.ToString("F1") + "nm");
                     return false; // 原版档位颜色同样被锚点色覆盖
                 }
@@ -41,8 +59,9 @@ namespace RainbowJudgement
             }
         }
 
-        /// <summary>DebugLog 交叉校验（日志由 Logger 自行门控）：仪表盘 tick 的刻度（游戏值，auto 强制 0）
-        /// 应与我们算的判定位移刻度一致。两边都是 60 刻度，别拿度数去比。</summary>
+        /// <summary>DebugLog 交叉校验（日志由 Logger 自行门控）：仪表盘 tick 的刻度
+        /// （游戏在 playerControl 里算出来、原样传给 AddHit 的那个值；auto 判定会被游戏强制为 0）
+        /// 应与我们算的判定位移刻度一致。两边都是"刻度"，别拿度数去比。</summary>
         [HarmonyPatch(typeof(scrHitErrorMeter), "AddHit")]
         public static class TickAngleCrossCheckHook
         {
@@ -55,24 +74,6 @@ namespace RainbowJudgement
                     double ours = LastJudge.ScaledPos;
                     if (Math.Abs(meter - ours) > 0.01)
                         Logger.Log("[TickAngleCheck] meter=" + meter.ToString("F3") + " ours=" + ours.ToString("F3"));
-                }
-                catch { }
-            }
-        }
-
-        /// <summary>auto 判定检测：scrPlayer.Hit 的 isAuto/auto（官方 autoplay 与自动砖块均置位）。
-        /// 同时抓一份"游戏即将用来决定记账档位的原始输入"快照 —— 这一步在 `Hit` 开头，
-        /// `currFloor` 还指着**这次判定对应的那一格**，正好是游戏读 `scrFloor.auto` 的时机。</summary>
-        [HarmonyPatch(typeof(scrPlayer), "Hit")]
-        public static class AutoDetectPatch
-        {
-            [HarmonyPrefix]
-            public static void Prefix(scrPlayer __instance, bool isAuto)
-            {
-                try
-                {
-                    LastJudge.AutoActive = isAuto || (__instance != null && __instance.auto);
-                    GetMarginHook.CaptureHitSignals(__instance, isAuto);
                 }
                 catch { }
             }
@@ -92,10 +93,24 @@ namespace RainbowJudgement
                 if (!GameState.InGameWorld) return;
                 try
                 {
-                    // hitangle/refangle 是弧度 → 度；auto 判定强制完美中心
+                    // hitangle/refangle 是弧度 → 度。**一律用真实角度误差**：
+                    // auto 判定在 2.9.8 里本身就是"和这一格的角度差"，游戏只在记账时改写档位，
+                    // 所以这里不做任何清零（清零过一次，结果是全部判定 0ms 紫色）。
                     double delta = (hitangle - refangle) * (isCW ? 1.0 : -1.0) * 57.29578;
-                    bool auto = LastJudge.AutoActive;
-                    if (auto) delta = 0.0;
+
+                    Compat.CaptureCurrentFloor();
+                    scrFloor floor = Compat.CurrentFloor;
+
+                    // 2.9.8 的 AddHit 紧接着这次 GetHitMargin（同一个 SwitchChosen、同一格），
+                    // 而 SwitchChosen 用的 floor.speed 与 hitangle/refangle 是配套的 —— 所以这里
+                    // 统一用"当前判定格"的 speed 重建一次 bpm×speed，保证 tick / 账本 / 重算三者同源。
+                    if (floor != null)
+                    {
+                        double floorSpeed = RainbowMath.GameSpeedOf(floor);
+                        if (floorSpeed > 0.0001) bpmTimesSpeed = (float)(RainbowMath.GameBpm() * floorSpeed);
+                        double floorScale = RainbowMath.MarginScaleOf(floor, 0.0);
+                        if (floorScale > 0.0) marginScale = floorScale;
+                    }
 
                     double countedDeg = RainbowMath.CountedBoundaryDeg(bpmTimesSpeed, conductorPitch, marginScale);
                     GradientFrame frame = GradientFrame.FromRuntime(countedDeg, marginScale, bpmTimesSpeed, conductorPitch);
@@ -103,9 +118,20 @@ namespace RainbowJudgement
                     double absScaled = Math.Abs(delta) * frame.PosPerDeg;
                     double absDeg = Math.Abs(delta);
 
+                    // 【游戏口径的强制 PP】中旋（midspin）格上 scrPlanet.SwitchChosen 会把
+                    // midspinInfiniteMargin 为真的判定**直接改写成 HitMargin.Perfect** 再记进 hitMargins
+                    // （2.9.8 的 IL：读 scrController.midspinInfiniteMargin → ldc.i4.3 → AddHit）。
+                    // 这种判定的角度误差其实在完美窗口之外，游戏却按 PP 记账。
+                    // 关键顺序：**必须在算 InPure 之前**认出来，否则它会被当成"角度真的在窗内"
+                    // 混进 7 档计数器与 X^n（这就是上一版"中旋多计入"的原因）。
+                    bool midspin;
+                    bool forcedPP = Compat.ReadMidspinInfiniteMargin(out midspin) && midspin
+                        && (__result == HitMargin.Perfect || __result == HitMargin.Auto);
+
                     HitRecord record = default(HitRecord);
                     record.HasData = true;
-                    record.IsAuto = auto;
+                    record.IsAuto = (__result == HitMargin.Auto) || IsAutoNow(floor);
+                    record.ForcePP = forcedPP;
                     record.Tier = -1;
                     record.DeltaDeg = delta;
                     record.PosPerDeg = frame.PosPerDeg;
@@ -121,30 +147,8 @@ namespace RainbowJudgement
                     // 【统计范围】7 档计数器（F A B C D E G）只收「原版完美边界之内」的判定。
                     // EP/LP（稍快！/稍晚！）、VE/VL、Too 都在 PP 边界之外 → 不进任何档位桶、不进 X^n 的 r
                     // （它们仍然参与平均判定颜色与平均绝对时间/角度偏差——那三处统计的是全部判定）。
-                    record.InPure = absScaled <= frame.PpScaled;
-
-                    // 【游戏口径的强制 PP】中旋（midspin）格上 scrPlanet.SwitchChosen 会把
-                    // midspinInfiniteMargin 为真的判定**直接改写成 HitMargin.Perfect** 再记进 hitMargins
-                    // （IL：midspinInfiniteMargin → ldc.i4.3 → AddHit；autoplay 同理 → Auto），
-                    // 所以这种判定的角度误差其实在完美窗口之外，游戏却按 PP 记账。
-                    // 这里照游戏口径认出来：只有"游戏确实记成 Perfect/Auto"且"几何量在窗口外"才算，
-                    // 免得把 midspin 上真正打死的判定（Too）也算进去。
-                    if (!record.InPure)
-                    {
-                        record.ForcePP = MirrorsForcedPerfect(__result);
-                        if (!record.ForcePP && (__result == HitMargin.Perfect || __result == HitMargin.Auto))
-                        {
-                            // 游戏把这条记成 PP，几何量却在窗口外，而且**不是**中旋强制那条路
-                            // → 说明"游戏 PP 总数"里还有别的来源，或者本 Mod 的窗口算错了。
-                            // 两种都是必须留证据的事（否则差值会被静默吞掉），所以直接写 UMM 日志。
-                            Logger.Warn("[GetMargin] 游戏记 PP 但几何量在窗口外且非中旋强制："
-                                + " result=" + __result + " absDeg=" + absDeg.ToString("F3")
-                                + " ppDeg=" + record.PpDeg.ToString("F3")
-                                + " absScaled=" + absScaled.ToString("F3") + " ppScaled=" + frame.PpScaled.ToString("F3")
-                                + " marginScale=" + marginScale.ToString("F4") + " bpmSpeed=" + bpmTimesSpeed.ToString("F3")
-                                + " practice=" + frame.PracticeScale.ToString("F3"));
-                        }
-                    }
+                    // 强制 PP（中旋）同样不进：游戏记账是 Perfect，但几何量在窗口外，走下面 ForcePP 那条路。
+                    record.InPure = !record.ForcePP && absScaled <= frame.PpScaled;
 
                     if (record.InPure)
                     {
@@ -163,6 +167,7 @@ namespace RainbowJudgement
                     }
 
                     // 平均判定颜色 / 平均绝对时间偏差 / 平均绝对角度偏差：全部判定都算
+                    // （强制 PP 的三项会在 RainbowProgress.CountRecord 里按游戏口径折成零误差）
                     record.Lambda = AnchorSet.WavelengthAt(absScaled, frame);
                     record.TimeMs = RainbowMath.TimeMsOfDeg(absDeg, bpmTimesSpeed, conductorPitch);
 
@@ -174,7 +179,7 @@ namespace RainbowJudgement
                         + " countedDeg=" + countedDeg.ToString("F1") + " ppDeg=" + record.PpDeg.ToString("F1")
                         + " wl=" + record.Lambda.ToString("F1") + "nm t=" + record.TimeMs.ToString("F2") + "ms p=" + record.P.ToString("F4")
                         + " diff=" + record.Difficulty
-                        + " " + ForcedSignalsText()
+                        + " " + ForcedSignalsText(floor)
                         + (record.InPure ? "" : "（完美窗口外：计入颜色/偏差，不计入 F~G 档位与 X^n）")
                         + (record.ForcePP ? "（强制PP：游戏记账改写成 Perfect → 补进自定义判定最严一档，并按零误差计入平均判定与 X^n）" : ""));
 
@@ -186,174 +191,52 @@ namespace RainbowJudgement
                 }
             }
 
-            // ---------------- 游戏"强制 PP"的复刻（中旋 / 旧式 autoplay） ----------------
-            //
-            // scrPlanet.SwitchChosen 里真正写进 scrMarginTracker.AddHit 的值是 V_6，它的决策是：
-            //   V_6 = GetHitMargin(...)                      // 按角度算出来的档位（判定文字用的也是它）
-            //   if (midspinInfiniteMargin) V_6 = 3;          // 3 = HitMargin.Perfect
-            //   if ((player.auto || floor.auto) && !useOldAuto) V_6 = 3;
-            //   if (floor.auto) V_6 = 10;                    // 10 = HitMargin.Auto
-            // 也就是说"游戏记账的档位"和"GetHitMargin 按角度给出的档位"在中旋 / 旧式自动砖上会分叉。
-            // 本 Mod 要复刻的正是这个分叉 —— 认出来之后：自定义判定补进最严一档，
-            // 平均判定与 X^n 按零误差计入（游戏 X-Accuracy 里 Perfect 拿满分权重 1.0）。
-
-            private static System.Reflection.FieldInfo _midspinField;
-            private static bool _fieldsSearched;
-            private static System.Reflection.PropertyInfo _useOldAutoProp;
-
-            // scrPlayer.Hit 开头抓的快照：此刻 currFloor 正是"这次判定对应的那一格"，
-            // 是游戏读 scrFloor.auto / midSpin 的时机（AutoDetectPatch.Prefix 里写入）。
-            private static bool _hitIsAuto;
-            private static bool _hitPlayerAuto;
-            private static bool _hitFloorAuto;
-            private static bool _hitFloorMidspin;
-            private static bool _hitSnapshotValid;
-
-            /// <summary>由 AutoDetectPatch.Prefix 调用：抓一份游戏决策要用的原始输入。</summary>
-            public static void CaptureHitSignals(scrPlayer player, bool isAuto)
+            /// <summary>当场是否 auto（官方 autoplay 或自动砖）。只读游戏自己的状态、不做任何缓存，
+            /// 避免再出现"标记粘住导致所有判定都被当 auto"的问题。</summary>
+            private static bool IsAutoNow(scrFloor floor)
             {
                 try
                 {
-                    EnsureFields();
-                    _hitIsAuto = isAuto;
-                    _hitPlayerAuto = player != null && player.auto;
-                    _hitFloorAuto = false;
-                    _hitFloorMidspin = false;
-                    scrFloor floor = PlayerCurrFloor(player);
-                    if (floor != null)
-                    {
-                        _hitFloorAuto = floor.auto;
-                        _hitFloorMidspin = floor.midSpin;
-                    }
-                    _hitSnapshotValid = true;
+                    if (floor != null && floor.auto) return true;
                 }
-                catch { _hitSnapshotValid = false; }
-            }
-
-            /// <summary>
-            /// 这次判定是否被游戏改写成 PP。判据对着 SwitchChosen 的 V_6 决策逐条来，
-            /// 并且**只认游戏确实记成 Perfect/Auto 的那些**（VE/VL/Too 是游戏照实记账的真失误，不算）。
-            /// 采集点（GetHitMargin 的 postfix）就在 SwitchChosen 内部、决策之前，所以读到的
-            /// `midspinInfiniteMargin` 就是游戏即将用来记账的值。
-            /// </summary>
-            private static bool MirrorsForcedPerfect(HitMargin hit)
-            {
-                if (hit != HitMargin.Perfect && hit != HitMargin.Auto) return false;
+                catch { }
                 try
                 {
-                    EnsureFields();
-
-                    scrController ctrl = scrController.instance;
-                    scrPlayer player = ctrl != null ? ctrl.playerOne : null;
-                    if (player == null) return false;
-
-                    // ① 中旋：scrPlayer.Hit / SwitchChosen 里读 currFloor.midSpin 置位，随后强制 Perfect
-                    if (_midspinField != null)
+                    System.Reflection.PropertyInfo prop = typeof(RDC).GetProperty("auto",
+                        System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+                    if (prop != null)
                     {
-                        object value = _midspinField.GetValue(player);
+                        object value = prop.GetValue(null, null);
                         if (value is bool && (bool)value) return true;
                     }
-
-                    // ② 旧式 autoplay 的自动砖：(player.auto || floor.auto) && !useOldAuto → 强制 Perfect
-                    if (UseOldAuto()) return false;
-                    if (_hitSnapshotValid && (_hitIsAuto || _hitPlayerAuto || _hitFloorAuto)) return true;
-                    if (player.auto) return true;
-
-                    scrFloor floor = PlayerCurrFloor(player);
-                    return floor != null && floor.auto;
                 }
-                catch { return false; }
+                catch { }
+                return false;
             }
+
+            // ---------------- 游戏"强制 PP"的诊断 ----------------
+            //
+            // 2.9.8 的 scrPlanet.SwitchChosen 里写进 scrMistakesManager.AddHit 的档位来自这段决策：
+            //   V_5 = GetHitMargin(...)                                     // 按刻度算出来的档位（判定文字用的也是它）
+            //   if (midspinInfiniteMargin) V_5 = 3;                          // 3 = HitMargin.Perfect
+            //   if (V_17 && GCS.hitMarginLimit == 2 && scrController.noFail) V_5 = 9;  // 9 = FailOverload
+            //   if (midspinInfiniteMargin) V_5 = 3;
+            // 而真正的"地面真值"是 AddHit 收到的那一个档位（见 MistakesAddHitHook 里的 MergeGameGrade 校准）。
 
             /// <summary>诊断用：把决策输入原样读出来（读不到返回 "?"），漏判时靠它定位是哪一条没对上。</summary>
-            private static string ForcedSignalsText()
+            private static string ForcedSignalsText(scrFloor floor)
             {
                 try
                 {
-                    EnsureFields();
-                    scrController ctrl = scrController.instance;
-                    scrPlayer player = ctrl != null ? ctrl.playerOne : null;
-                    if (player == null) return "?";
-
-                    string mid = "?";
-                    if (_midspinField != null)
-                    {
-                        object value = _midspinField.GetValue(player);
-                        if (value is bool) mid = (bool)value ? "1" : "0";
-                    }
-                    scrFloor floor = PlayerCurrFloor(player);
+                    bool midspin;
+                    string mid = Compat.ReadMidspinInfiniteMargin(out midspin) ? (midspin ? "1" : "0") : "?";
+                    scrFloor current = floor != null ? floor : Compat.CurrentFloor;
                     return "mid=" + mid
-                        + " pA=" + ((_hitSnapshotValid ? _hitPlayerAuto : player.auto) ? "1" : "0")
-                        + " fA=" + ((_hitSnapshotValid && _hitFloorAuto) || (floor != null && floor.auto) ? "1" : "0")
-                        + " fM=" + ((_hitSnapshotValid && _hitFloorMidspin) || (floor != null && floor.midSpin) ? "1" : "0")
-                        + " old=" + (UseOldAuto() ? "1" : "0");
+                        + " fA=" + (current != null && current.auto ? "1" : "0")
+                        + " fM=" + (current != null && current.midSpin ? "1" : "0")
+                        + " RDCauto=" + (IsAutoNow(null) ? "1" : "0");
                 }
                 catch { return "?"; }
-            }
-
-            private static System.Reflection.PropertyInfo _currFloorProp;
-            private static System.Reflection.FieldInfo _planetaryField;
-            private static System.Reflection.FieldInfo _chosenPlanetField;
-            private static System.Reflection.FieldInfo _planetCurrfloorField;
-            /// <summary>判定所对应的那一格（= scrPlayer.get_currFloor() 的等价读取）。
-            /// 注意 `scrPlayer.currFloor` 是**属性**不是字段：IL 是
-            /// <c>chosenPlanet → scrPlanet.currfloor</c>，所以优先反射属性，取不到再顺着
-            /// planetarySystem.chosenPlanet.currfloor 手动走一遍。</summary>
-            private static scrFloor PlayerCurrFloor(scrPlayer player)
-            {
-                if (player == null) return null;
-                try
-                {
-                    if (_currFloorProp != null)
-                    {
-                        scrFloor floor = _currFloorProp.GetValue(player, null) as scrFloor;
-                        if (floor != null) return floor;
-                    }
-                    if (_planetaryField == null || _chosenPlanetField == null || _planetCurrfloorField == null) return null;
-                    object system = _planetaryField.GetValue(player);
-                    if (system == null) return null;
-                    object planet = _chosenPlanetField.GetValue(system);
-                    if (planet == null) return null;
-                    return _planetCurrfloorField.GetValue(planet) as scrFloor;
-                }
-                catch { return null; }
-            }
-
-            private static bool UseOldAuto()
-            {
-                if (_useOldAutoProp == null) return false;
-                try
-                {
-                    object value = _useOldAutoProp.GetValue(null, null);
-                    return value is bool && (bool)value;
-                }
-                catch { return false; }
-            }
-
-            /// <summary>一次性解析需要的非 public 成员
-            /// （scrPlayer.midspinInfiniteMargin / currFloor 属性、scrPlanet.currfloor、RDC.useOldAuto）。</summary>
-            private static void EnsureFields()
-            {
-                if (_fieldsSearched) return;
-                _fieldsSearched = true;
-                const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Public
-                    | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
-
-                _midspinField = typeof(scrPlayer).GetField("midspinInfiniteMargin", flags);
-                _currFloorProp = typeof(scrPlayer).GetProperty("currFloor",
-                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic
-                    | System.Reflection.BindingFlags.Instance);
-                // 属性拿不到时的备用路径：scrPlayer.planetarySystem → scrPlanet.chosenPlanet → scrPlanet.currfloor
-                _planetaryField = typeof(scrPlayer).GetField("planetarySystem", flags);
-                _chosenPlanetField = typeof(PlanetarySystem).GetField("chosenPlanet", flags);
-                _planetCurrfloorField = typeof(scrPlanet).GetField("currfloor", flags);
-                try { _useOldAutoProp = typeof(RDC).GetProperty("useOldAuto", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static); }
-                catch { _useOldAutoProp = null; }
-
-                if (_midspinField == null || (_currFloorProp == null && _planetCurrfloorField == null))
-                    Logger.Warn("[JudgeHooks] 反射失败：midspinInfiniteMargin=" + (_midspinField != null)
-                        + " currFloorProp=" + (_currFloorProp != null) + " planetCurrfloor=" + (_planetCurrfloorField != null)
-                        + " → 中旋强制 PP 的辅助信号不可用（主判据是 AddHit 的地面真值对账，仍能对上账）");
             }
 
             /// <summary>
@@ -364,10 +247,9 @@ namespace RainbowJudgement
             {
                 try
                 {
-                    scrMarginTracker tracker = GameState.PlayerTracker;
-                    if (tracker == null || tracker.hitMargins == null) return "hitMargins=null";
+                    List<HitMargin> margins = GameState.HitMargins;
+                    if (margins == null) return "hitMargins=null";
 
-                    List<HitMargin> margins = tracker.hitMargins;
                     int[] counts = new int[16];
                     for (int i = 0; i < margins.Count; i++)
                     {
@@ -391,7 +273,8 @@ namespace RainbowJudgement
             }
         }
 
-        /// <summary>游戏计数入口：每次"判定被计入"追加一条（与 hitMargins 索引严格对齐）。
+        /// <summary>游戏计数入口（2.9.8：<c>scrMistakesManager.AddHit</c>）：每次"判定被计入"追加一条
+        /// （与 hitMargins 索引严格对齐）。
         /// 尖刺/激光等没有判定的计数（FailMiss 等）没有暂存数据 → 写占位条目，保证索引不错位。
         /// 这里不按 HitMargin 过滤统计——有暂存数据的按几何量照单全收
         /// （游戏会把"没打在正中"的标成 EarlyPerfect/LatePerfect，那不该被丢掉）；
@@ -399,17 +282,16 @@ namespace RainbowJudgement
         /// **同时用游戏记下的档位校准强制 PP**：`hit` 就是最终进 hitMargins 的值，
         /// 它说 Perfect/Auto 而几何量在窗口外 → 必定是游戏按完美记账（中旋 / 旧式自动砖），
         /// 这种校准不依赖任何标志位，是这套机制的地面真值。</summary>
-        [HarmonyPatch(typeof(scrMarginTracker), "AddHit")]
-        public static class MarginTrackerAddHitHook
+        [HarmonyPatch(typeof(scrMistakesManager), "AddHit")]
+        public static class MistakesAddHitHook
         {
             [HarmonyPostfix]
-            public static void Postfix(scrMarginTracker __instance, HitMargin hit)
+            public static void Postfix(HitMargin hit)
             {
                 try
                 {
                     if (!Main.Active) return;
                     if (!GameState.InGameWorld) return;
-                    if (!RainbowProgress.IsPlayerOneTracker(__instance)) return;
 
                     HitRecord record;
                     if (!RainbowProgress.ConsumePending(out record) || !record.HasData)

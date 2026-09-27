@@ -157,6 +157,7 @@ namespace RainbowJudgement
         [HarmonyPatch(typeof(scnEditor), "SwitchToEditMode")]
         public static class EditorHidePatch
         {
+            [HarmonyPostfix]
             public static void Postfix()
             {
                 try { HideAll(); }

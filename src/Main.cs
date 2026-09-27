@@ -1,5 +1,5 @@
 using System;
-using System.Reflection;
+using System.Collections.Generic;
 using HarmonyLib;
 using UnityModManagerNet;
 
@@ -38,8 +38,11 @@ namespace RainbowJudgement
             CustomJudge.EnsureDefaults(); // 首次运行：写入出厂四条自定义判定
             CustomJudge.InvalidateLayout();
 
+            if (!Compat.SetAccessors())
+                Logger.Warn("[Main] 当前判定格访问器解析失败（tick 取色/自动判定识别会退化）");
+
             _harmony = new Harmony(modEntry.Info.Id);
-            _harmony.PatchAll(Assembly.GetExecutingAssembly());
+            PatchAllIndividually();
 
             modEntry.OnToggle = OnToggle;
             modEntry.OnGUI = SettingsGui.Draw;
@@ -64,6 +67,49 @@ namespace RainbowJudgement
                     + " | DebugLog=" + Settings.DebugLog);
             });
             return true;
+        }
+
+        /// <summary>
+        /// 逐个注册补丁（**2.9.8 专属做法**）：不用 PatchAll。
+        /// PatchAll 的语义是"任何一条补丁的目标类型/方法在当前游戏里不存在 → 抛异常 → 整个 Mod 加载失败"，
+        /// 而 2.9.8 与 3.3.0 的游戏类型形状差异很大（例如这一版根本没有 scrMarginTracker）。
+        /// 逐个注册 + try/catch 之后，缺哪一条只丢那一项功能，其余照常工作，并且失败原因会写进日志。
+        /// </summary>
+        private static void PatchAllIndividually()
+        {
+            List<System.Type> patches = new List<System.Type>();
+            patches.Add(typeof(JudgeHooks.TickColorHook));
+            patches.Add(typeof(JudgeHooks.TickAngleCrossCheckHook));
+            patches.Add(typeof(JudgeHooks.GetMarginHook));
+            patches.Add(typeof(JudgeHooks.MistakesAddHitHook));
+            patches.Add(typeof(ProgressHooks.SceneAwakePatch));
+            patches.Add(typeof(ProgressHooks.MistakesRevertPatch));
+            patches.Add(typeof(ProgressHooks.MistakesResetPatch));
+            patches.Add(typeof(ProgressHooks.SavedProgressStorePatch));
+            patches.Add(typeof(ProgressHooks.CheckpointLoadPatch));
+            patches.Add(typeof(ProgressHooks.SavedProgressDeletePatch));
+            patches.Add(typeof(VisualHooks.HitTextColorPatch));
+            patches.Add(typeof(VisualHooks.FlawlessXPatch));
+            patches.Add(typeof(VisualHooks.FlawlessXResetPatch));
+            patches.Add(typeof(MeterVisualPatch));
+            patches.Add(typeof(ResultsPatch));
+            patches.Add(typeof(LiveDisplay.EditorHidePatch));
+
+            int ok = 0;
+            for (int i = 0; i < patches.Count; i++)
+            {
+                System.Type type = patches[i];
+                try
+                {
+                    _harmony.CreateClassProcessor(type).Patch();
+                    ok++;
+                }
+                catch (Exception ex)
+                {
+                    Logger.Warn("[Main] 补丁注册失败（该项功能不可用）：" + type.Name + " → " + ex.Message);
+                }
+            }
+            Logger.Log("[Main] 补丁注册完成：" + ok + "/" + patches.Count);
         }
 
         private static bool OnToggle(UnityModManager.ModEntry modEntry, bool value)

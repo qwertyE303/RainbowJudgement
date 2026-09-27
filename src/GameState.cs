@@ -1,10 +1,17 @@
 using System;
+using System.Collections.Generic;
 
 namespace RainbowJudgement
 {
     /// <summary>
     /// 游戏状态访问的统一出口：把散落在各处的 try/catch 取值收敛到一处。
     /// 全部为"读不到就返回安全默认值"的只读封装，不做任何修改游戏状态的操作。
+    ///
+    /// **2.9.8 专属差异**：这一版没有 scrMarginTracker 类型，判定账本
+    /// （<c>hitMargins</c> / <c>hitMarginsCount</c> / <c>lastHitMarginsSize</c>）是
+    /// <c>scrMistakesManager</c> 的**静态**成员，由两个玩家共享（2.9.8 的双人共用同一份统计，
+    /// 所以这里不需要"只认 playerOne"的判断）。对外暴露的成员名保持与 3.3.0 那棵树一致，
+    /// 便于以后两边同步改动。
     /// </summary>
     public static class GameState
     {
@@ -28,24 +35,50 @@ namespace RainbowJudgement
             get { try { return GCS.checkpointNum; } catch { return 0; } }
         }
 
-        /// <summary>单人模式下 playerOne 的判定追踪器（marginTrackers 是静态数组，场景加载早期也可用）</summary>
-        public static scrMarginTracker PlayerTracker
+        /// <summary>游戏的判定列表（2.9.8 是 scrMistakesManager 的静态字段，读不到返回 null）</summary>
+        public static List<HitMargin> HitMargins
         {
             get
             {
-                try
+                try { return scrMistakesManager.hitMargins; }
+                catch { return null; }
+            }
+        }
+
+        /// <summary>游戏某个档位的判定条数（读不到返回 0）。
+        /// **2.9.8 差异**：GetHits 是**实例**方法（3.3.0 里是 scrMarginTracker 的实例方法），
+        /// 实例从 scrController.mistakesManager 取。</summary>
+        public static int Hits(HitMargin margin)
+        {
+            try
+            {
+                scrController ctrl = scrController.instance;
+                scrMistakesManager manager = ctrl != null ? ctrl.mistakesManager : null;
+                if (manager != null) return manager.GetHits(margin);
+            }
+            catch { }
+            // 兜底：直接从静态判定列表里数（大厅/场景早期没有 mistakesManager 时也能用）
+            try
+            {
+                List<HitMargin> margins = scrMistakesManager.hitMargins;
+                if (margins != null)
                 {
-                    scrMarginTracker[] trackers = scrMistakesManager.marginTrackers;
-                    if (trackers != null && trackers.Length > 0 && trackers[0] != null) return trackers[0];
+                    int count = 0;
+                    for (int i = 0; i < margins.Count; i++) if (margins[i] == margin) count++;
+                    return count;
                 }
-                catch { }
-                try
-                {
-                    scrController ctrl = scrController.instance;
-                    if (ctrl != null && ctrl.playerOne != null) return ctrl.playerOne.marginTracker;
-                }
-                catch { }
-                return null;
+            }
+            catch { }
+            return 0;
+        }
+
+        /// <summary>游戏记录的"存档点时的判定条数"快照（读不到返回 0），进度指纹用</summary>
+        public static int LastHitMarginsSize
+        {
+            get
+            {
+                try { return scrMistakesManager.lastHitMarginsSize; }
+                catch { return 0; }
             }
         }
 
@@ -54,8 +87,11 @@ namespace RainbowJudgement
         {
             get
             {
-                scrMarginTracker t = PlayerTracker;
-                try { return t != null ? t.hitMargins.Count : 0; }
+                try
+                {
+                    List<HitMargin> margins = scrMistakesManager.hitMargins;
+                    return margins != null ? margins.Count : 0;
+                }
                 catch { return 0; }
             }
         }
@@ -66,12 +102,7 @@ namespace RainbowJudgement
         /// 的近失判定（可以是 42° 这种大角度），与角度口径不是同一件事。</summary>
         public static int PerfectCount
         {
-            get
-            {
-                scrMarginTracker t = PlayerTracker;
-                try { return t != null ? t.GetHits(HitMargin.Perfect) + t.GetHits(HitMargin.Auto) : 0; }
-                catch { return 0; }
-            }
+            get { return Hits(HitMargin.Perfect) + Hits(HitMargin.Auto); }
         }
 
         /// <summary>"有判定数据"的判定条数 = hitMargins.Count − 故障类（Multipress/FailMiss/FailOverload/OverPress）。
@@ -81,16 +112,12 @@ namespace RainbowJudgement
         {
             get
             {
-                scrMarginTracker t = PlayerTracker;
-                if (t == null) return 0;
-                try
-                {
-                    int faults = t.GetHits(HitMargin.Multipress) + t.GetHits(HitMargin.FailMiss)
-                        + t.GetHits(HitMargin.FailOverload) + t.GetHits(HitMargin.OverPress);
-                    int n = t.hitMargins.Count - faults;
-                    return n > 0 ? n : 0;
-                }
-                catch { return 0; }
+                int total = MarginCount;
+                if (total <= 0) return 0;
+                int faults = Hits(HitMargin.Multipress) + Hits(HitMargin.FailMiss)
+                    + Hits(HitMargin.FailOverload) + Hits(HitMargin.OverPress);
+                int n = total - faults;
+                return n > 0 ? n : 0;
             }
         }
 

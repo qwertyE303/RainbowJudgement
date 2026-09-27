@@ -128,10 +128,26 @@ namespace RainbowJudgement
                 TMP_FontAsset[] fonts = Resources.FindObjectsOfTypeAll<TMP_FontAsset>();
                 if (fonts != null && fonts.Length > 0) return fonts[0];
 
-                TextMeshProUGUI[] texts = UnityEngine.Object.FindObjectsByType<TextMeshProUGUI>(FindObjectsSortMode.None);
+                TextMeshProUGUI[] texts = Compat.FindAll<TextMeshProUGUI>();
                 for (int i = 0; i < texts.Length; i++)
                 {
                     if (texts[i] != null && texts[i].font != null) return texts[i].font;
+                }
+
+                // 兜底：用游戏自己的字体（txtCongrats 用的 Font）动态创建一个 TMP 字体资源
+                // **2.9.8 差异**：这一版自带的 TextMeshPro 只有 CreateFontAsset(Font) 单参重载
+                // （3.3.0 多了 CreateFontAsset(string, string, int) 那种按名创建的重载）。
+                Font gameFont = null;
+                try
+                {
+                    scrController ctrl = scrController.instance;
+                    if (ctrl != null && ctrl.txtCongrats != null) gameFont = ctrl.txtCongrats.font;
+                }
+                catch { }
+                if (gameFont != null)
+                {
+                    TMP_FontAsset created = TMP_FontAsset.CreateFontAsset(gameFont);
+                    if (created != null) return created;
                 }
             }
             catch { }

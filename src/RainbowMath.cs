@@ -50,25 +50,46 @@ namespace RainbowJudgement
             catch { return 1.0; }
         }
 
-        /// <summary>复刻原版 AddHit / CalculateTickColor 的 speed 取值：hitFloor.speed → playerOne.prevfloor.speed → 1</summary>
+        /// <summary>复刻原版 AddHit / CalculateTickColor 的 speed 取值：
+        /// hitFloor.speed → 当前判定格 speed → 1（2.9.8 没有 scrPlayer，等价物是 chosenPlanet.currfloor）。</summary>
         public static float GameSpeedOf(scrFloor hitFloor)
         {
             try
             {
                 if (hitFloor != null) return hitFloor.speed;
-                scrController ctrl = scrController.instance;
-                if (ctrl != null && ctrl.playerOne != null && ctrl.playerOne.currFloor != null && ctrl.playerOne.currFloor.prevfloor != null)
-                    return ctrl.playerOne.currFloor.prevfloor.speed;
+                scrFloor current = Compat.CurrentFloor;
+                if (current != null) return current.speed;
                 return 1f;
             }
             catch { return 1f; }
         }
 
+        /// <summary>当前 BPM（读不到返回 120）</summary>
+        public static double GameBpm()
+        {
+            try { return scrConductor.instance.bpm; }
+            catch { return 120.0; }
+        }
+
         /// <summary>判定/刻度同款 bpm×speed（hitFloor 基准，与原版 AddHit/CalculateTickColor 一致）</summary>
         public static double GameBpmTimesSpeedOf(scrFloor hitFloor)
         {
-            try { return scrConductor.instance.bpm * GameSpeedOf(hitFloor); }
+            try { return GameBpm() * GameSpeedOf(hitFloor); }
             catch { return 120.0; }
+        }
+
+        /// <summary>marginScale 取值：优先用调用方给的（2.9.8 的 tick 取色有该参数），
+        /// 没有/非法时退回"当前判定格"自己的 marginScale（2.9.8 的 scrFloor 有该字段）。</summary>
+        public static double MarginScaleOf(scrFloor floor, double fallback)
+        {
+            if (fallback > 0.0001) return fallback;
+            try
+            {
+                scrFloor current = floor != null ? floor : Compat.CurrentFloor;
+                if (current != null && current.marginScale > 0.0001) return current.marginScale;
+            }
+            catch { }
+            return fallback > 0.0 ? fallback : 1.0;
         }
 
         public static double GetPitchNow()

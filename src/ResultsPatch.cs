@@ -1,11 +1,12 @@
 using System;
 using HarmonyLib;
 using UnityEngine;
+using UnityEngine.UI;
 
 namespace RainbowJudgement
 {
     /// <summary>
-    /// 结果页：
+    /// 结果页（**2.9.8 版**）：
     ///   ① 「平均判定」——插在最后一行（X-Accuracy 与 Checkpoints 之间），可分别开关 颜色 / 时间 / 角度：
     ///        全开：平均判定：■（7.01ms,12.3°）
     ///        只有时间：平均判定：7.01ms
@@ -14,18 +15,31 @@ namespace RainbowJudgement
     ///      · 有「错过：x  按太快：x」那一行（noFail / 安全砖 / coop）→ 塞进该行末尾；
     ///      · 没有那一行（普通关卡）→ **新起一行**，插在「太快/太慢」与「准确度/已用检查点/最大按键」之间。
     /// 两者都只改动文本内容，**不做任何版面位移**。
-    /// 各自独立判重（coop 每 2 秒轮播 / 暂停恢复会重复调用 ShowForPlayer）。
+    ///
+    /// **2.9.8 与 3.3.0 的差异**：这一版没有 DetailedResults 类型，结尾页文本由
+    /// <c>scrController.OnLandOnPortal</c> 自己拼好写进 <c>scrController.txtResults</c>
+    /// （IL 里同样是「5 空格分隔 + missFails 行 + xAccuracy 收尾」，结构与 3.3.0 逐位相同），
+    /// 所以整套插入逻辑原样复用，只换宿主与文本框。
+    /// 注意：该文本只在游戏设置「显示详细结果」(scrController.showDetailedResults) 打开时才会被写入，
+    /// 关闭时文本框是空的 —— 此时我们插入的是一行孤零零的统计，所以选择跳过并留日志。
     /// </summary>
-    [HarmonyPatch(typeof(DetailedResults), "ShowForPlayer")]
+    [HarmonyPatch(typeof(scrController), "OnLandOnPortal")]
     public static class ResultsPatch
     {
+        /// <summary>诊断用：本帧是否已经为这个 txtResults 插入过（避免同一次结算重复插入）</summary>
+        private static Text _lastTarget;
+        private static string _lastTextAfter;
+
         [HarmonyPostfix]
-        public static void Postfix(DetailedResults __instance, int playerIndex)
+        public static void Postfix(scrController __instance)
         {
             try
             {
-                if (__instance == null || __instance.textComponent == null) return;
+                if (__instance == null) return;
                 if (!Main.Active) return;
+
+                Text target = __instance.txtResults;
+                if (target == null) return;
 
                 RainbowSettings settings = Main.Settings;
                 if (settings == null) return;
@@ -36,16 +50,31 @@ namespace RainbowJudgement
                     && CustomJudge.EnabledCount > 0;
                 if (!showAverage && !showCount) return;
 
-                string text = __instance.textComponent.text;
-                if (string.IsNullOrEmpty(text)) return;
+                string text = target.text;
+                if (string.IsNullOrEmpty(text))
+                {
+                    // 游戏没写详细结果（showDetailedResults 关闭 / 非详细结算）
+                    Logger.Log("[RainbowJudgement] 结果页跳过：txtResults 为空（游戏未生成详细结果）"
+                        + " showDetailedResults=" + scrController.showDetailedResults
+                        + " 统计数=" + RainbowState.Count);
+                    return;
+                }
+
+                if (ReferenceEquals(_lastTarget, target) && text == _lastTextAfter)
+                {
+                    Logger.Log("[RainbowJudgement] 结果页跳过：本次结算已插入过");
+                    return;
+                }
 
                 bool changed = false;
-                if (showAverage) changed |= InsertAverage(__instance, ref text, settings);
+                if (showAverage) changed |= InsertAverage(ref text, settings);
                 if (showCount) changed |= InsertCustomCount(ref text);
 
                 if (changed)
                 {
-                    __instance.textComponent.text = text;
+                    _lastTarget = target;
+                    _lastTextAfter = text;
+                    target.text = text;
                     Logger.Log("[RainbowJudgement] 结果页: 判定数=" + RainbowState.Count
                         + " 平均波长=" + RainbowState.AverageWavelength.ToString("F1") + "nm"
                         + " 平均时间=" + RainbowState.AverageAbsTimeMs.ToString("F2") + "ms"
@@ -70,7 +99,7 @@ namespace RainbowJudgement
 
         // ---------------- 平均判定 ----------------
 
-        private static bool InsertAverage(DetailedResults instance, ref string text, RainbowSettings settings)
+        private static bool InsertAverage(ref string text, RainbowSettings settings)
         {
             string label = Lang.ResultsLabel("average");
             if (text.Contains(label))

@@ -97,8 +97,7 @@ namespace RainbowJudgement
     {
         private static readonly List<HitRecord> _hits = new List<HitRecord>();
         private static HitRecord _pending;
-        private static bool _pendingFresh;
-        private static int _pendingFrame = -1;
+        private static bool _pendingValid;
         private static string _lastWarnKey;
         private static bool _anchorLogged; // 每次关卡只打印一次锚点表（诊断用）
         private static int _counted;       // 参与统计的条数（有判定数据）
@@ -117,20 +116,26 @@ namespace RainbowJudgement
 
         // ---------------- 暂存（GetMarginHook 填 → AddHit 消费） ----------------
 
+        /// <summary>暂存这一次判定的数据。**同一判定的多次写入算一条**：
+        /// 2.9.8 的 scrPlanet.SwitchChosen 内部会调用两次 scrMisc.GetHitMargin
+        /// （一次按刻度、一次在中旋标志置位后），两次都发生在同一次 AddHit 之前 ——
+        /// 用"帧号 + 游戏当前判定条数"当键，把同一次判定的写入归并成一条。</summary>
         public static void Stash(HitRecord record)
         {
             _pending = record;
-            _pendingFresh = true;
-            _pendingFrame = Time.frameCount;
+            _pendingValid = true;
         }
 
-        /// <summary>消费暂存数据；只有"同一帧内刚记录过"才算新鲜（避免尖刺/激光等无判定的计数拿到旧数据）</summary>
+        /// <summary>消费暂存数据。**每次 AddHit 都必须调用**（无论是否取到有效数据），
+        /// 消费后立刻作废，避免残留数据被算到下一次判定头上。
+        /// 注意不能再用"同帧才算新鲜"的判据：同一次判定的两次 GetHitMargin 都在同帧，
+        /// 而两次判定也可能撞在同一帧（实测发生过），只能靠上面的键归并。</summary>
         public static bool ConsumePending(out HitRecord record)
         {
             record = _pending;
-            bool fresh = _pendingFresh && _pendingFrame == Time.frameCount;
-            _pendingFresh = false;
-            return fresh;
+            bool valid = _pendingValid;
+            _pendingValid = false;
+            return valid;
         }
 
         public static HitRecord MakePlaceholder()
@@ -247,8 +252,7 @@ namespace RainbowJudgement
         public static void Clear()
         {
             _hits.Clear();
-            _pendingFresh = false;
-            _pendingFrame = -1;
+            _pendingValid = false;
             _anchorLogged = false;
             _counted = 0;
             _countedInPure = 0;
@@ -375,14 +379,6 @@ namespace RainbowJudgement
         public static void FillPlaceholders(int count)
         {
             for (int i = 0; i < count; i++) _hits.Add(MakePlaceholder());
-        }
-
-        /// <summary>是否为 playerOne 的追踪器（只统计单人）</summary>
-        public static bool IsPlayerOneTracker(scrMarginTracker tracker)
-        {
-            if (tracker == null) return false;
-            scrMarginTracker mine = GameState.PlayerTracker;
-            return mine != null && ReferenceEquals(mine, tracker);
         }
 
         // ---------------- 自检 ----------------

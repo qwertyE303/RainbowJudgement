@@ -50,7 +50,8 @@ namespace RainbowJudgement
         {
             try
             {
-                scrHitErrorMeter[] meters = UnityEngine.Object.FindObjectsByType<scrHitErrorMeter>(FindObjectsSortMode.None);
+                // Unity 2018.3 没有 FindObjectsByType → 走 Compat 的兼容查找
+                scrHitErrorMeter[] meters = Compat.FindAll<scrHitErrorMeter>();
                 if (meters == null) return;
                 foreach (scrHitErrorMeter meter in meters)
                 {
