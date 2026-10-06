@@ -9,6 +9,20 @@ namespace RainbowJudgement
     ///   · 设置界面 → 由 <see cref="RainbowSettings.GuiLanguage"/> 决定（中文 / English / 日本語 / 한국어）
     ///   · 结果页标签 → 始终跟随**游戏语言**（与 v1.1.0 行为一致，覆盖 11 种语言）
     /// 新增文案只需在 <see cref="Build"/> 里加一行。
+    ///
+    /// **⚠ 启动期禁令（2.9.8 实机事故，别再犯）**
+    /// <see cref="DetectFromGame"/> 与 <see cref="ResultsLabel"/> 会读 `Persistence.language`。
+    /// 2.9.8 的 <c>PlayerPrefsJson.Select(SaveFileType.General)</c> 在"这份存档还没被读出来"时会
+    /// **先造一份空存档并注册进静态表** <c>saveFiles</c>；随后 <c>Persistence.Load()</c> 虽然成功读出了
+    /// 真实的 <c>User\data.sav</c>，却因为它的 <c>AddSaveFile</c> 只做
+    /// `if (!saveFiles.ContainsKey(t)) saveFiles.Add(...)`（**不替换已有条目**）而被静默丢弃，
+    /// 于是游戏拿着空存档继续跑（version=0 → 重置世界进度）并把它写回 data.sav ——
+    /// 玩家的**进度与设置一起被清空**。
+    /// UMM 加载本 Mod 发生在 <c>ADOStartup.Startup</c> 的 <c>LoadSaveData</c> 之前（实测 Player.log），
+    /// 所以**启动期（Main.Load 及其整条调用链）碰一次 `Persistence.*` 就会触发**。
+    /// → 语言的"按游戏语言预选"一律推迟到设置页首次绘制 / 关卡内首次使用（那时 Load 早已跑完，
+    ///   读到的就是玩家在游戏里设的语言）。3.3.0 没有这个坑：它的 <c>Persistence.Load</c> 开头会先
+    ///   <c>PlayerPrefsJson.files.Clear()</c> 再重新装载，所以提前访问是安全的。
     /// </summary>
     public static class Lang
     {
@@ -37,7 +51,8 @@ namespace RainbowJudgement
             return key;
         }
 
-        /// <summary>当前 GUI 语言（1~4）；未设置时按游戏语言预选</summary>
+        /// <summary>当前 GUI 语言（1~4）；未设置时按游戏语言预选。
+        /// **⚠ 调用方必须保证此刻游戏已经读完存档**（见 <see cref="DetectFromGame"/>）。</summary>
         public static int Resolve()
         {
             try
@@ -49,7 +64,10 @@ namespace RainbowJudgement
             return DetectFromGame();
         }
 
-        /// <summary>按游戏语言预选（只认这四种，其余回退英文）。玩家在设置页点过语言按钮后就不再走这里。</summary>
+        /// <summary>按游戏语言预选（只认这四种，其余回退英文）。玩家在设置页点过语言按钮后就不再走这里。
+        /// **⚠ 只能在游戏读完存档之后调用**（设置页绘制 / 关卡内实时文本）：它读的是 `Persistence.language`，
+        /// 而 2.9.8 在 `Persistence.Load()` 之前被读一次就会把玩家存档清空 —— 机制见本类注释。
+        /// 启动期（Main.Load）那处调用已改为直接打印 <see cref="RainbowSettings.GuiLanguage"/> 原始值。</summary>
         public static int DetectFromGame()
         {
             try

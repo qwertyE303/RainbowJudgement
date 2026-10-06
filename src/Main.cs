@@ -54,9 +54,15 @@ namespace RainbowJudgement
             Logger.Guard("Main/Load", delegate { LiveDisplay.EnsureUI(); });
             Logger.Guard("Main/Load", delegate
             {
+                // ⚠ 启动期的任何一行日志都【不能】调用 Lang.Resolve() / Lang.T() / Lang.DetectFromGame()：
+                // 它们会去读游戏的 Persistence.language，而 2.9.8 的 PlayerPrefsJson 在"存档还没被读出来"
+                // 时被访问，会先造一份空存档注册进静态表（Select → CreateSaveFile），且它的 AddSaveFile
+                // 不替换已有条目 → 游戏随后真正读出来的 data.sav 被静默丢弃、并被写回成空档，
+                // 玩家的进度与设置就会被清空。详见 Lang 的类注释（这里原本就是那起事故的触发点）。
+                Logger.Log("[Main] 语言预选延迟：启动期不访问游戏 Persistence（2.9.8 会在存档读完前造出空档并覆盖玩家存档）");
                 Logger.Log("[Main] UMM ModPath=" + ModPath + " | 资源基准目录=" + ModPaths.BaseDir
                     + " | 日志文件=" + Logger.FilePath
-                    + " | 语言=" + Lang.Resolve()
+                    + " | 语言设置=" + Settings.GuiLanguage + "（0 = 未设置，按游戏语言预选，延迟解析）"
                     + " | 开关 彩虹=" + Settings.EnableRainbow + " 判定详情=" + Settings.ShowJudgeDetails
                     + "（时间=" + Settings.ShowAverageTime + " 颜色=" + Settings.ShowAverageColor
                     + " 角度=" + Settings.ShowAverageAngle + "）"
