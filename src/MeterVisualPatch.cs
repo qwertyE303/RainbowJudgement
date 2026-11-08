@@ -62,11 +62,10 @@ namespace RainbowJudgement
             catch { }
         }
 
-        private static void ReplaceImage(GameObject root, Sprite sprite)
+        private static void ReplaceImage(Image image, Sprite sprite)
         {
-            if (root == null || sprite == null) return;
-            Image image = root.GetComponent<Image>();
-            if (image != null) image.sprite = sprite;
+            if (image == null || sprite == null) return;
+            image.sprite = sprite;
         }
     }
 }

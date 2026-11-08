@@ -500,45 +500,25 @@ namespace RainbowJudgement
     /// <summary>
     /// 自定义判定的计数（纯数据，按规范顺序索引）：索引 0 = 最严格档（早/晚合并），其余早/晚分开。
     /// 由 RainbowProgress 在追加与全量重放时驱动，所以它永远等于"当前档位定义下账本的结论"。
-    /// 特例：被游戏**强制记成 PP** 的判定（中旋 midspin / autoplay，见 <see cref="HitRecord.ForcePP"/>）
-    /// 不看几何量、直接补进最严一档 —— 与游戏结果页的 PP 总数对齐。
+    /// 自动砖 / 中旋这类非玩家判定根本不会进到这里（RainbowProgress 已按游戏的口径把它们排除在统计之外）。
     /// </summary>
     public static class CustomCounter
     {
         public static readonly int[] Early = new int[CustomJudge.MaxTiers];
         public static readonly int[] Late = new int[CustomJudge.MaxTiers];
-        /// <summary>比最宽档还宽、**按几何量**没落进任何档的判定数（X^n 取色要用：非 0 表示"没有哪一档能包含全部判定"）。
-        /// 被游戏强制记成 PP 的判定不算在内 —— 它们按游戏口径补进了最严一档（见 <see cref="ForcedPP"/>）。</summary>
+        /// <summary>比最宽档还宽、没落进任何档的判定数（X^n 取色要用：非 0 表示"没有哪一档能包含全部判定"）。</summary>
         public static int OutOfRange { get; private set; }
-        /// <summary>被游戏**强制记成 PP**（中旋 midspin / 旧式 autoplay）而补进最严一档的判定数。
-        /// 已经计入 Early[0] / Late[0]，这里只是单独留个可读的账（供日志对账，页面上不显示）。
-        /// 注意它**不是** OutOfRange 的一部分：这些判定按游戏口径算进了最严档，没有被丢弃。</summary>
-        public static int ForcedPP { get; private set; }
 
         public static void ResetCounts()
         {
             for (int i = 0; i < CustomJudge.MaxTiers; i++) { Early[i] = 0; Late[i] = 0; }
             OutOfRange = 0;
-            ForcedPP = 0;
         }
 
         /// <summary>按当前档位定义给一次判定分档并累加（越界不计入任何档，只记 OutOfRange）。
-        /// 边界取 <paramref name="difficulty"/> 那一行（= 该判定发生时的关卡难度）。
-        /// <paramref name="isForcedPP"/> = 游戏把这个判定强制记成了 PP（角度误差其实在完美窗口之外）：
-        /// 此时**不看几何量**，直接补进**最严那一档**（规范顺序索引 0，早/晚按 delta 符号分），
-        /// 与游戏的记账口径一致 —— 这样"自定义判定各档之和 == 结果页 PP 总数"才成立。</summary>
-        public static void Count(double absScaled, bool isEarly, GradientFrame frame, int difficulty, bool isForcedPP)
+        /// 边界取 <paramref name="difficulty"/> 那一行（= 该判定发生时的关卡难度）。</summary>
+        public static void Count(double absScaled, bool isEarly, GradientFrame frame, int difficulty)
         {
-            if (isForcedPP)
-            {
-                // 一条"填过内容"的启用档位都没有 → 没有最严那一档可补，只能记越界（照旧不显示）
-                if (CustomJudge.EnabledCount <= 0) { OutOfRange++; return; }
-                ForcedPP++;
-                if (isEarly) Early[0]++;
-                else Late[0]++;
-                return;
-            }
-
             int index = CustomJudge.Assign(absScaled, frame, difficulty);
             if (index < 0)
             {
@@ -550,9 +530,10 @@ namespace RainbowJudgement
             else Late[index]++;
         }
 
-        public static void Count(double absScaled, bool isEarly, GradientFrame frame, bool isForcedPP = false)
+        /// <summary>按"严格"难度分档（简写形式）</summary>
+        public static void Count(double absScaled, bool isEarly, GradientFrame frame)
         {
-            Count(absScaled, isEarly, frame, TierDifficulty.Strict, isForcedPP);
+            Count(absScaled, isEarly, frame, TierDifficulty.Strict);
         }
 
         /// <summary>第 i 档显示的数字数（0 档早/晚合并成 1 个）</summary>

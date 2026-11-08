@@ -78,44 +78,94 @@ namespace RainbowJudgement
         }
 
         // ---------------- 原版边界角（直接用游戏自己的函数，保证与判定分类逐位一致） ----------------
+        //
+        // 3.4.0 起游戏把四个边界打包成一个结构体返回（scrMisc.GetAdjustedAngleBoundaryInDeg →
+        // HitMarginGeneralWithXPerfectValues<double>），并且多出了 XPerfect 一档；
+        // 原来的 scrMisc.GetHitMargin 也拆成了 GetHitMarginInDeg / GetHitMarginInSec 两个入口。
+
+        /// <summary>一次判定所需的四个原版边界角（度）</summary>
+        public struct Boundaries
+        {
+            /// <summary>Counted 边界（仪表盘 60 刻度的位置）</summary>
+            public double Counted;
+            /// <summary>EP/LP 的外边界（BP：45° / 30ms）</summary>
+            public double Perfect;
+            /// <summary>PP 边界（30° / 20ms）——本 Mod 的"完美窗口"就是它</summary>
+            public double Pure;
+            /// <summary>X 完美边界（12.5° / 1/60s），3.4 新增</summary>
+            public double XPerfect;
+        }
+
+        /// <summary>四个原版边界角一次取全（游戏函数失败时回退到同构公式）</summary>
+        public static Boundaries GameBoundaries(double bpmTimesSpeed, double conductorPitch, double marginScale)
+        {
+            try
+            {
+                scrMisc.HitMarginGeneralWithXPerfectValues<double> game =
+                    scrMisc.GetAdjustedAngleBoundaryInDeg(GCS.difficulty, bpmTimesSpeed, conductorPitch, marginScale);
+                if (game.Counted > 0.0001 && game.Perfect > 0.0001 && game.Pure > 0.0001)
+                {
+                    Boundaries b = default(Boundaries);
+                    b.Counted = game.Counted;
+                    b.Perfect = game.Perfect;
+                    b.Pure = game.Pure;
+                    b.XPerfect = game.XPerfect;
+                    return b;
+                }
+            }
+            catch { }
+            return FallbackBoundaries(bpmTimesSpeed, conductorPitch, marginScale);
+        }
 
         /// <summary>Counted 边界角(度)：max(HITMARGIN_COUNTED×marginScale, 时间下限对应角度)</summary>
         public static double CountedBoundaryDeg(double bpmTimesSpeed, double conductorPitch, double marginScale)
         {
-            return GameBoundary(HitMarginGeneral.Counted, bpmTimesSpeed, conductorPitch, marginScale, 60.0, 0.065);
+            return GameBoundaries(bpmTimesSpeed, conductorPitch, marginScale).Counted;
         }
 
-        /// <summary>Pure 边界角(度)：PP 之外那一档（稍快!/稍晚!）的外边界，原版取 45° / 30ms</summary>
+        /// <summary>EP/LP 外边界角(度)：PP 之外那一档（稍快!/稍晚!）的外边界，原版取 45° / 30ms</summary>
         public static double PureBoundaryDeg(double bpmTimesSpeed, double conductorPitch, double marginScale)
         {
             // 原版 HitMarginGeneral 的命名与边界交叉：Perfect=1 给 45°，Pure=2 给 30°
-            return GameBoundary(HitMarginGeneral.Perfect, bpmTimesSpeed, conductorPitch, marginScale, 45.0, 0.03);
+            return GameBoundaries(bpmTimesSpeed, conductorPitch, marginScale).Perfect;
         }
 
-        /// <summary>Perfect 边界角(度)：原版 PP 边界，30° / 20ms（PP 与 EP/LP 的分界）</summary>
+        /// <summary>PP 边界角(度)：原版 PP 边界，30° / 20ms（PP 与 EP/LP 的分界）</summary>
         public static double PerfectBoundaryDeg(double bpmTimesSpeed, double conductorPitch, double marginScale)
         {
-            return GameBoundary(HitMarginGeneral.Pure, bpmTimesSpeed, conductorPitch, marginScale, 30.0, 0.02);
+            return GameBoundaries(bpmTimesSpeed, conductorPitch, marginScale).Pure;
         }
 
-        /// <summary>交给游戏算；失败时回退到同构公式（角度下限 × marginScale 与时间下限对应角度取大）</summary>
-        private static double GameBoundary(HitMarginGeneral kind, double bpmTimesSpeed, double conductorPitch,
-            double marginScale, double baseDeg, double baseSec)
+        /// <summary>交给游戏算；失败时回退到同构公式（角度下限 × marginScale 与时间下限对应角度取大）。
+        /// 时间下限：Counted 严格 40ms / 标准 65ms / 宽松 91ms，EP/LP 30ms，PP 20ms，
+        /// 全部先除以 currentSpeedTrial（练习速度）再下限 25ms。</summary>
+        private static Boundaries FallbackBoundaries(double bpmTimesSpeed, double conductorPitch, double marginScale)
         {
+            double trial = PracticeSpeed();
+            double perMs = DegPerMs(bpmTimesSpeed, conductorPitch);
+
+            double countedSec;
             try
             {
-                double value = scrMisc.GetAdjustedAngleBoundaryInDeg(kind, bpmTimesSpeed, conductorPitch, marginScale);
-                if (!double.IsNaN(value) && value > 0.0) return value;
+                switch (GCS.difficulty)
+                {
+                    case Difficulty.Strict: countedSec = 0.040; break;
+                    case Difficulty.Lenient: countedSec = 0.091; break;
+                    default: countedSec = 0.065; break;
+                }
             }
-            catch { }
+            catch { countedSec = 0.065; }
 
-            double trial = 1.0;
-            try { if (GCS.currentSpeedTrial > 0.0001f) trial = GCS.currentSpeedTrial; }
-            catch { }
-            double timeSec = kind == HitMarginGeneral.Counted ? baseSec : baseSec / trial;
-            timeSec = Math.Max(timeSec, 0.025);
-            double timeDeg = timeSec * 1000.0 * DegPerMs(bpmTimesSpeed, conductorPitch);
-            return Math.Max(baseDeg * marginScale, timeDeg);
+            double countedDegBase;
+            try { countedDegBase = GCS.HITMARGIN_COUNTED; }
+            catch { countedDegBase = 60.0; }
+
+            Boundaries b = default(Boundaries);
+            b.Counted = Math.Max(countedDegBase * marginScale, Math.Max(0.025, countedSec / trial) * 1000.0 * perMs);
+            b.Perfect = Math.Max(45.0 * marginScale, Math.Max(0.025, 0.030 / trial) * 1000.0 * perMs);
+            b.Pure = Math.Max(30.0 * marginScale, Math.Max(0.025, 0.020 / trial) * 1000.0 * perMs);
+            b.XPerfect = Math.Max(12.5, (1.0 / 60.0) * 1000.0 * perMs);
+            return b;
         }
 
         // ---------------- 固定 7 档（紫 / 青 / 蓝 / PP）的边界刻度 ----------------

@@ -60,23 +60,36 @@ namespace RainbowJudgement
             }
         }
 
-        /// <summary>游戏计入的"完美"条数 = Perfect + Auto。
-        /// 实测它正是"角度落在 PP 边界内"的条数（本 Mod 7 档计数器 / X^n 的统计范围），用作不变量自检。
-        /// 不要拿 Perfect+EarlyPerfect+LatePerfect 去比：EP/LP 是"命中时刻在完美时间窗内、角度已超出 PP 边界"
-        /// 的近失判定（可以是 42° 这种大角度），与角度口径不是同一件事。</summary>
+        /// <summary>游戏计入的"完美"条数 = 完美− / X完美 / 完美+。
+        /// 3.4.0 起游戏把"角度落在 PP 边界内"的判定拆成 PerfectMinus / XPerfect / PerfectPlus 三类
+        /// （旧的单一 <c>HitMargin.Perfect</c> 已不存在），这三类合起来正好等于本 Mod 7 档计数器 /
+        /// X^n 的统计范围，用作不变量自检。
+        /// 不要拿 EP/LP 去比：EP/LP 是"命中时刻在完美时间窗内、角度已超出 PP 边界"的近失判定
+        /// （可以是 42° 这种大角度），与角度口径不是同一件事。
+        /// 也不要拿 <c>HitMarginHelper.PerfectHitMargins</c> 去比：那个静态数组还含 Auto/Midspin/Multipress
+        /// （它们按游戏口径不是"玩家判定"，本 Mod 与 X-Accuracy 一样把它们排除在统计之外）。</summary>
         public static int PerfectCount
         {
             get
             {
                 scrMarginTracker t = PlayerTracker;
-                try { return t != null ? t.GetHits(HitMargin.Perfect) + t.GetHits(HitMargin.Auto) : 0; }
+                try
+                {
+                    return t != null
+                        ? t.GetHits(HitMargin.PerfectMinus) + t.GetHits(HitMargin.XPerfect) + t.GetHits(HitMargin.PerfectPlus)
+                        : 0;
+                }
                 catch { return 0; }
             }
         }
 
-        /// <summary>"有判定数据"的判定条数 = hitMargins.Count − 故障类（Multipress/FailMiss/FailOverload/OverPress）。
-        /// 这四种只会由尖刺/激光/多按/Overspress 触发（没有 GetHitMargin、没有角度误差），
-        /// 所以 Mod 账本里它们是占位条目；其余条数都应参与统计。</summary>
+        /// <summary>"该由玩家打出来、且有判定数据"的条数 =
+        /// hitMargins.Count − 故障类（Multipress/FailMiss/FailOverload/OverPress/FailedFloor）
+        /// − 非玩家判定（Auto 自动砖 / Midspin 中旋）。
+        /// 故障类与 Auto/Midspin 都没有"玩家打出来的角度误差"：故障类压根没有 GetHitMargin；
+        /// 自动砖与中旋由 <c>scrPlanet.SwitchChosen</c> 在记账前把档位改写成 Auto(12) / Midspin(14)，
+        /// 游戏的 X-Accuracy 也把它们排除在分子分母之外。所以它们在 Mod 账本里只是占位条目，
+        /// 不进任何判定统计。</summary>
         public static int CountableCount
         {
             get
@@ -86,12 +99,21 @@ namespace RainbowJudgement
                 try
                 {
                     int faults = t.GetHits(HitMargin.Multipress) + t.GetHits(HitMargin.FailMiss)
-                        + t.GetHits(HitMargin.FailOverload) + t.GetHits(HitMargin.OverPress);
-                    int n = t.hitMargins.Count - faults;
+                        + t.GetHits(HitMargin.FailOverload) + t.GetHits(HitMargin.OverPress)
+                        + t.GetHits(HitMargin.FailedFloor);
+                    int notJudged = t.GetHits(HitMargin.Auto) + t.GetHits(HitMargin.Midspin);
+                    int n = t.hitMargins.Count - faults - notJudged;
                     return n > 0 ? n : 0;
                 }
                 catch { return 0; }
             }
+        }
+
+        /// <summary>该档位是否"不是玩家判定"（自动砖 / 中旋）——这两种档位是游戏在记账前改写的，
+        /// 没有对应的角度误差，Mod 账本只记一条占位、不进任何统计（与游戏 X-Accuracy 一致）。</summary>
+        public static bool IsNonJudgedGrade(HitMargin grade)
+        {
+            return grade == HitMargin.Auto || grade == HitMargin.Midspin;
         }
 
         /// <summary>是否处于关卡世界且未暂停（计数器 UI 的显示条件）</summary>

@@ -22,24 +22,26 @@ namespace RainbowJudgement
     {
         private const string FileName = "rainbow_judgement.sav";
         /// <summary>存档格式版本：1 = 只有前 7 列；2 = + 几何数据（delta…practiceScale）；
-        /// 3 = + 强制PP 标记；4 = + 判定瞬间的关卡难度</summary>
-        private const int FormatVersion = 4;
+        /// 3 = + 非玩家判定标记（当时叫"强制PP"）；4 = + 判定瞬间的关卡难度；
+        /// 5 = 判定模型换成 3.4.0（第 15 列语义由"强制PP"改为"排除出统计"）</summary>
+        private const int FormatVersion = 5;
 
         /// <summary>每格判定的字段顺序（写进文件头，方便人工查看）。
         /// 前 7 列与 v1 完全一致（老存档可直接读）；第 8~14 列是 v2 追加的**几何数据**，
         /// 有了它才能按当前档位定义对历史判定重算颜色与计数（见 HitRecord）；
-        /// 第 15 列是 v3 追加的**强制PP 标记**（中旋 midspin 被游戏改成 Perfect 的判定）；
+        /// 第 15 列是 v3 追加的**非玩家判定标记**（v5 起写作 Excluded：自动砖 Auto / 中旋 Midspin 只占账本索引）；
         /// 第 16 列是 v4 追加的**关卡难度**——难度是全局运行时量、游戏不随存档恢复，
         /// 而玩家可以在局内切换，所以必须逐条存下来，重放时才能按记录自己的难度选档位行。
-        /// 新增列一律**追加在末尾**，所以 v1~v3 老存档读进来只是缺列取默认值，不会错位
-        /// （难度缺列 → 严格，与玩家约定一致）。
+        /// 新增列一律**追加在末尾**，所以 v1~v4 老存档读进来只是缺列取默认值，不会错位
+        /// （难度缺列 → 严格，与玩家约定一致）。3.4.0 换判定模型后老存档不再保证语义一致
+        /// （游戏自己的 data.sav 里 hitMargins 是裸整数，跨版本会串档）。
         /// 注意：第 2 列 "isPerfect" 是历史列名，写的是「是否落在原版完美窗口内」(InPure)，
         /// 保持列序号不变，老存档仍可读。</summary>
         private static readonly string[] Fields =
         {
             "hasData", "isPerfect", "isAuto", "tier", "lambda", "timeMs", "p",
             "deltaDeg", "posPerDeg", "aScale", "bScale", "ppDeg", "pureDeg", "practiceScale",
-            "forcePP", "difficulty"
+            "excluded", "difficulty"
         };
 
         // ---------------- 路径 ----------------
@@ -146,7 +148,7 @@ namespace RainbowJudgement
                 row.Add(r.PpDeg);
                 row.Add(r.PureDeg);
                 row.Add(r.PracticeScale);
-                row.Add(r.ForcePP ? 1 : 0);
+                row.Add(r.Excluded ? 1 : 0);
                 row.Add(r.Difficulty);
                 rows.Add(row);
             }
@@ -267,7 +269,7 @@ namespace RainbowJudgement
                     if (row.Count > 11) r.PpDeg = ToDouble(row[11]);
                     if (row.Count > 12) r.PureDeg = ToDouble(row[12]);
                     if (row.Count > 13) r.PracticeScale = ToDouble(row[13]);
-                    if (row.Count > 14) r.ForcePP = ToInt(row[14]) != 0;
+                    if (row.Count > 14) r.Excluded = ToInt(row[14]) != 0;
                     // v4：判定瞬间的难度；老存档（v1~v3）缺这一列 → 严格
                     r.Difficulty = row.Count > 15 ? ToInt(row[15]) : TierDifficulty.Strict;
                     if (r.Difficulty < 0 || r.Difficulty >= TierDifficulty.Count) r.Difficulty = TierDifficulty.Strict;

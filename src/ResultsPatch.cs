@@ -6,7 +6,8 @@ namespace RainbowJudgement
 {
     /// <summary>
     /// 结果页：
-    ///   ① 「平均判定」——插在最后一行（X-Accuracy 与 Checkpoints 之间），可分别开关 颜色 / 时间 / 角度：
+    ///   ① 「平均判定」——追加到「已用检查点 / 练习次数」那一行的行末（3.4.0 起该行是单独一行；
+    ///      找不到该行则追加到最后一个非空行末），可分别开关 颜色 / 时间 / 角度：
     ///        全开：平均判定：■（7.01ms,12.3°）
     ///        只有时间：平均判定：7.01ms
     ///        只有角度：平均判定：12.3°
@@ -51,15 +52,14 @@ namespace RainbowJudgement
                         + " 平均时间=" + RainbowState.AverageAbsTimeMs.ToString("F2") + "ms"
                         + " 平均角度=" + RainbowState.AverageAbsDeg.ToString("F2") + "°"
                         + " 完美窗口内=" + RainbowProgress.CountedInPure
-                        + " 强制PP=" + RainbowProgress.CountedForcedPP
-                        + " 游戏(Perfect+Auto)=" + GameState.PerfectCount
+                        + " 游戏(完美−+X完美+完美+)=" + GameState.PerfectCount
                         + " 显示=[平均" + (showAverage ? "T" : "-")
                         + (settings.ShowAverageTime ? "t" : "-")
                         + (settings.ShowAverageAngle ? "a" : "-")
                         + (settings.ShowAverageColor ? "c" : "-") + " 计数" + (showCount ? "T" : "F") + "]");
 
-                    // 对账用：游戏自己的 hitMargins 分布（我们的 in-window / 强制PP 应当能和它对上）
-                    Logger.Log("[RainbowJudgement] 游戏 hitMargins: " + JudgeHooks.GetMarginHook.HitMarginsHistogram());
+                    // 对账用：游戏自己的 hitMargins 分布（我们的 in-window 应当能和游戏的三项完美对上）
+                    Logger.Log("[RainbowJudgement] 游戏 hitMargins: " + JudgeHooks.HitMarginsHistogram());
                 }
             }
             catch (Exception ex)
@@ -91,25 +91,76 @@ namespace RainbowJudgement
                 else Logger.Log(why + "（本局没有判定，属正常）");
             }
 
+            // 锚点：3.4.0 起「准确度/X分数」与「已用检查点」拆成两行，最后一行不再含 5 空格分隔符
+            // （v1.4.0 实测 4/4 次都卡在「最后一行无 5 空格分隔符」直接早退），所以改为按游戏自己的
+            // 「已用检查点 / 练习次数」标签定位那一行，把平均判定追加到该行末尾；找不到再退化为最后一行。
             int start, end;
-            if (!FindLastLine(text, out start, out end))
+            bool onCheckpoints = false;
+            string anchor = CheckpointsLabel();
+            if (anchor.Length > 0 && FindLineEndByLabel(text, anchor, out start, out end))
+            {
+                onCheckpoints = true;
+            }
+            else if (!FindLastLine(text, out start, out end))
             {
                 LogExit("找不到任何非空行", text);
                 return false;
             }
 
-            int separator = text.IndexOf("     ", start, StringComparison.Ordinal);
-            if (separator < 0 || separator >= end)
-            {
-                // 找不到「5 空格分隔符」定位点——「结果页不显示」的另一个可能出口，必须留证
-                LogExit("最后一行无 5 空格分隔符", text);
-                return false;
-            }
-
             string line = JudgeDetails.EndPageLine(label, settings.ShowAverageColor,
                 settings.ShowAverageTime, settings.ShowAverageAngle);
-            text = text.Substring(0, separator) + "     " + line + text.Substring(separator);
+            text = text.Substring(0, end) + "     " + line + text.Substring(end);
+            Logger.Log("[RainbowJudgement] 结果页插入平均判定：锚点=" + (onCheckpoints ? "检查点行" : "最后一行")
+                + " | 行=[" + LineText(text, end) + "]");
             return true;
+        }
+
+        /// <summary>游戏自己的「已用检查点 / 练习次数」标签（随语言变化），取不到返回空串</summary>
+        private static string CheckpointsLabel()
+        {
+            try
+            {
+                string key = "status.results." + (GCS.practiceMode ? "practiceAttempts" : "checkpoints");
+                string text = RDString.Get(key, null);
+                return text == null ? "" : text.Trim();
+            }
+            catch { return ""; }
+        }
+
+        /// <summary>按标签定位它所在行的内容末尾：[start, end)，end 不含行尾空白；找不到返回 false</summary>
+        private static bool FindLineEndByLabel(string text, string label, out int start, out int end)
+        {
+            start = -1;
+            end = -1;
+            if (string.IsNullOrEmpty(text) || string.IsNullOrEmpty(label)) return false;
+
+            int index = text.IndexOf(label, StringComparison.Ordinal);
+            if (index < 0) return false;
+
+            int lineStart = text.LastIndexOf('\n', index == 0 ? 0 : index - 1) + 1;
+            while (lineStart < index && char.IsWhiteSpace(text[lineStart])) lineStart++;
+
+            int lineEnd = text.IndexOf('\n', index);
+            if (lineEnd < 0) lineEnd = text.Length;
+
+            int contentEnd = LineContentEnd(text, lineStart, lineEnd);
+            if (contentEnd <= lineStart) return false;
+            start = lineStart;
+            end = contentEnd;
+            return true;
+        }
+
+        /// <summary>取 pos 所在的整行（去首尾空白、截断到 160 字符）——诊断日志用</summary>
+        private static string LineText(string text, int pos)
+        {
+            if (string.IsNullOrEmpty(text)) return "";
+            if (pos < 0) pos = 0;
+            if (pos > text.Length) pos = text.Length;
+            int start = text.LastIndexOf('\n', pos == 0 ? 0 : pos - 1) + 1;
+            int lineEnd = text.IndexOf('\n', pos);
+            if (lineEnd < 0) lineEnd = text.Length;
+            string line = text.Substring(start, lineEnd - start).Trim();
+            return line.Length > 160 ? line.Substring(0, 160) + "…" : line;
         }
 
         /// <summary>
@@ -155,13 +206,20 @@ namespace RainbowJudgement
             }
 
             string line = JudgeDetails.CustomCountLine(label);
-            if (string.IsNullOrEmpty(line)) return false;
+            if (string.IsNullOrEmpty(line))
+            {
+                Logger.Warn("[RainbowJudgement] 结果页：自定义判定计数文本为空（启用档位="
+                    + CustomJudge.EnabledCount + "，请检查档位设置）");
+                return false;
+            }
 
             int at = FindMissLineEnd(text);
             if (at >= 0)
             {
                 // 有「错过 / 按太快」那一行 → 塞进该行末尾
                 text = text.Substring(0, at) + "     " + line + text.Substring(at);
+                Logger.Log("[RainbowJudgement] 结果页：自定义判定计数塞进「错过/按太快」行末 | 行=["
+                    + LineText(text, at) + "]");
                 return true;
             }
 
